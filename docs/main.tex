@@ -1,0 +1,247 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows.meta,positioning,fit,backgrounds}
+
+\geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.96,0.96,0.96}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    citecolor=blue
+}
+
+\title{
+    \textbf{Sistemas Operacionais Modernos} \\
+    \large Trabalho Prático: Orquestração de Serviços, Sistemas Distribuídos e Monitoramento com Contêineres \\
+    \vspace{0.5cm}
+    \Large \textbf{Prática 1: Infraestrutura Web e Balanceamento de Carga} \\
+    \normalsize \textit{Simulador de Votação com Tolerância a Falhas e Persistência}
+}
+
+\author{
+    Equipe de Desenvolvimento e Infraestrutura \\
+    \textit{CEFET-MG / UFCI-MG --- Departamento de Computação (DECOM)} \\
+    Prof. Michel Pires da Silva
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este relatório documenta o planejamento, a implantação e a avaliação experimental de uma infraestrutura web resiliente e de alta disponibilidade baseada em contêineres Docker para um sistema de votação eletrônica. A arquitetura implementada organiza quatro contêineres interdependentes: um proxy reverso e balanceador de carga Nginx configurado com o algoritmo de menor número de conexões ativas (\textit{Least Connections}), duas instâncias homogêneas da API de votação desenvolvidas em Node.js/Express, e um Sistema Gerenciador de Banco de Dados relacional PostgreSQL versão 15 com persistência assegurada por Docker Volume nomeado e isolamento estrito via Docker Network em modo \textit{bridge}. O presente documento detalha especialmente as tecnologias utilizadas, evidenciando as decisões de projeto que garantem isolamento de rede, arquitetura \textit{stateless} das camadas de computação e conformidade contra falhas.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ==============================================================================
+\section{Introdução}
+% ==============================================================================
+Em ambientes corporativos e de alta demanda de processamento, a arquitetura monolítica tradicional de aplicação única revela-se insuficiente diante de picos intensos de requisições concorrentes. No contexto de um sistema de votação eletrônica, a indisponibilidade, o afunilamento de recursos computacionais ou a perda de registros em memória RAM comprometem diretamente a integridade do processo eleitoral.
+
+O objetivo desta prática consiste em projetar e implementar um ecossistema distribuído de microsserviços conteinerizados empregando o Docker Compose, estruturado a partir de:
+\begin{enumerate}
+    \item Um único ponto de entrada para clientes externos (porta 80) gerenciado pelo Nginx;
+    \item Distribuição equilibrada de requisições HTTP entre múltiplas réplicas da aplicação de votação;
+    \item Um banco de dados centralizado desacoplado da camada de aplicação;
+    \item Um mecanismo de persistência de dados independente do ciclo de vida dos contêineres;
+    \item Isolamento e segurança de rede interna, impedindo o acesso não autorizado direto aos nós de processamento e dados.
+\end{enumerate}
+
+% ==============================================================================
+\section{Mapeamento da Solução e Arquitetura}
+% ==============================================================================
+A arquitetura do projeto adota a topologia clássica de \textit{Proxy Reverso de Borda} com rede virtual privada (\textit{Docker Network}). A Figura~\ref{fig:arquitetura} ilustra o fluxo de dados entre os componentes e as fronteiras de isolamento.
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rectangle, rounded corners, minimum height=1cm, minimum width=2.4cm, align=center, fill=blue!5, font=\small},
+    proxy/.style={draw, rectangle, rounded corners, minimum height=1.2cm, minimum width=2.8cm, align=center, fill=green!15, font=\small\bfseries},
+    db/.style={draw, cylinder, shape border rotate=90, aspect=0.25, minimum height=1.2cm, minimum width=2.2cm, align=center, fill=orange!15, font=\small\bfseries},
+    vol/.style={draw, rectangle, dashed, minimum height=0.8cm, minimum width=2.2cm, align=center, fill=yellow!15, font=\footnotesize},
+    client/.style={draw, ellipse, minimum height=1cm, minimum width=2cm, align=center, fill=gray!15, font=\small},
+    arrow/.style={-Latex, thick}
+]
+    % Cliente Externo
+    \node[client] (user) {Cliente / Web\\(\texttt{localhost:80})};
+    
+    % Nginx
+    \node[proxy, right=1.5cm of user] (nginx) {Nginx Reverse Proxy\\(\texttt{proxy\_nginx})\\Porta 80};
+    
+    % APIs
+    \node[box, above right=0.5cm and 1.8cm of nginx] (api1) {API Instância 1\\(\texttt{api\_instancia\_1})\\Porta 5000};
+    \node[box, below right=0.5cm and 1.8cm of nginx] (api2) {API Instância 2\\(\texttt{api\_instancia\_2})\\Porta 5000};
+    
+    % Banco de Dados
+    \node[db, right=2.0cm of $(api1)!0.5!(api2)$] (db) {PostgreSQL 15\\(\texttt{db\_postgres})\\Porta 5432};
+    \node[vol, below=0.4cm of db] (volume) {Docker Volume\\\texttt{pgdata}};
+
+    % Conexões
+    \draw[arrow] (user) -- node[above, font=\footnotesize] {HTTP} (nginx);
+    \draw[arrow] (nginx) -- node[above left, font=\scriptsize] {\textit{least\_conn}} (api1);
+    \draw[arrow] (nginx) -- node[below left, font=\scriptsize] {\textit{least\_conn}} (api2);
+    \draw[arrow] (api1) -- node[above right, font=\scriptsize] {TCP/SQL} (db);
+    \draw[arrow] (api2) -- node[below right, font=\scriptsize] {TCP/SQL} (db);
+    \draw[dashed, thick] (db) -- (volume);
+
+    % Caixa de Rede Docker
+    \begin{scope}[on background layer]
+        \node[draw=red!60, line width=1pt, dashed, inner sep=0.4cm, rounded corners, fit=(nginx) (api1) (api2) (db) (volume), fill=red!2] (net) {};
+        \node[anchor=north west, red!70!black, font=\bfseries\footnotesize] at (net.north west) {Docker Network Privada: \texttt{rede\_votacao} (bridge)};
+    \end{scope}
+\end{tikzpicture}
+\caption{Diagrama Arquitetural da Solução: Rede Virtual Isolada, Proxy Nginx, APIs e Persistência.}
+\label{fig:arquitetura}
+\end{figure}
+
+% ==============================================================================
+\section{Tecnologias Utilizadas}
+% ==============================================================================
+Esta seção fornece a fundamentação técnica e a caracterização do papel desempenhado por cada ferramenta e contêiner integrado no ecossistema do Simulador de Votação, justificando as escolhas arquiteturais sob a ótica da teoria de Sistemas Operacionais Modernos e engenharia de software distribuído.
+
+\subsection{Nginx (Proxy Reverso e Balanceador de Carga)}
+O \textbf{Nginx} (versão oficial \texttt{nginx:alpine}) atua como a única porta de entrada exposta publicamente no ambiente hospedeiro (\textit{host port 80}). Suas funções e atribuições técnicas no projeto compreendem:
+\begin{itemize}
+    \item \textbf{Encapsulamento de Borda e Segurança:} Oculta a topologia interna da infraestrutura. Clientes não interagem diretamente com os nós de aplicação e desconhecem a existência de réplicas ou do banco de dados, protegendo portas de serviço não essenciais de ataques externos.
+    \item \textbf{Algoritmo de Balanceamento \textit{Least Connections} (\texttt{least\_conn}):} Em contraste com o algoritmo \textit{Round-Robin} tradicional --- que distribui as requisições em estrita fila indiana assumindo erroneamente que todo processamento possui a mesma duração computacional ---, o \textit{Least Connections} direciona a nova requisição HTTP para a instância de API com o menor número de conexões ativas simultâneas. Em um sistema de votação onde a escrita de registros no banco pode acarretar bloqueios transitórios de linha e tempos de resposta flutuantes, o \textit{Least Connections} evita a saturação de um nó engargalado, distribuindo o excedente para réplicas ociosas.
+    \item \textbf{Tolerância Ativa a Falhas (\textit{Health Check Passivo}):} Através dos parâmetros \texttt{max\_fails=3} e \texttt{fail\_timeout=5s}, o Nginx detecta automaticamente a inoperância de uma réplica após três tentativas frustradas, expurgando-a temporariamente do grupo de servidores ativos (\textit{upstream}) até sua recuperação.
+    \item \textbf{Reaproveitamento de Conexões TCP (\texttt{keepalive 32}):} Habilita a reutilização de soquetes de comunicação entre o Nginx e os nós de backend, mitigando a sobrecarga de repetidos \textit{handshakes} TCP em regimes de alta concorrência.
+\end{itemize}
+
+\subsection{Docker Engine e Docker Compose (Orquestração de Microsserviços)}
+A conteinerização e a orquestração do ecossistema baseiam-se no \textbf{Docker Engine} e na especificação do \textbf{Docker Compose}:
+\begin{itemize}
+    \item \textbf{Virtualização em Nível de Sistema Operacional:} Ao contrário de máquinas virtuais completas (hipervisores Tipo 1 ou 2), os contêineres Docker compartilham o mesmo \textit{kernel} do sistema operacional hospedeiro, utilizando recursos de \textit{Namespaces} (para isolamento de processos, IDs, interfaces de rede e pontos de montagem) e \textit{cgroups} (Control Groups, para limitação e contabilidade de uso de CPU e memória RAM). Isso viabiliza inicialização na escala de milissegundos e sobrecarga computacional mínima.
+    \item \textbf{Infraestrutura como Código (IaC):} O manifesto declarativo \texttt{docker-compose.yml} formaliza as dependências, mapeamento de volumes, injeção de variáveis de ambiente, políticas de reinicialização (\texttt{restart: always}) e topologia de rede, viabilizando reproducibilidade estrita em qualquer ambiente de execução.
+\end{itemize}
+
+\subsection{Docker Network (Rede Virtual Isolada)}
+Foi configurada uma rede definida pelo usuário denominada \texttt{rede\_votacao}, empregando o driver \texttt{bridge}:
+\begin{itemize}
+    \item \textbf{Isolamento de Tráfego:} Contêineres anexados a essa rede comunicam-se exclusivamente entre si. Serviços alheios ao projeto ou processos do sistema hospedeiro não têm acesso a esses canais sem exposição explícita de portas.
+    \item \textbf{DNS Embutido e Resolução de Nomes:} O Docker provê um servidor DNS interno que resolve o nome dos serviços e contêineres (\texttt{api1}, \texttt{api2}, \texttt{db}, \texttt{nginx}) para seus respectivos IPs virtuais dinâmicos (geralmente sob a faixa \texttt{172.x.x.x}), eliminando a necessidade de endereçamento IP estático acoplado.
+    \item \textbf{Blindagem dos Backends:} As diretivas \texttt{ports} foram deliberadamente suprimidas dos serviços de API (\texttt{api1} e \texttt{api2}) e do banco de dados (\texttt{db}), garantindo que apenas o serviço \texttt{nginx} possua porta externa associada à interface do host.
+\end{itemize}
+
+\subsection{Docker Volume (Persistência e Isolamento de Estado)}
+O banco de dados utiliza um volume nomeado gerenciado pelo Docker (\texttt{pgdata}):
+\begin{itemize}
+    \item \textbf{Desacoplamento do Ciclo de Vida do Contêiner:} Contêineres são efêmeros por projeto: comandos como \texttt{docker rm} ou falhas catastróficas destroem a camada de escrita com cópia (\textit{Copy-on-Write}). O Docker Volume reside fora dessa camada temporária, em área gerenciada pelo daemon do Docker no sistema hospedeiro (\texttt{/var/lib/docker/volumes/...}), garantindo a persistência estrita dos dados relacionais mesmo após a paralisação forçada (\texttt{docker stop}) ou destruição do contêiner do SGBD.
+    \item \textbf{Desempenho I/O Nativo:} Volumes ignoram os drivers de armazenamento em camadas (\textit{overlay2}), oferecendo desempenho de I/O em disco próximo ao nativo do sistema de arquivos do hospedeiro.
+\end{itemize}
+
+\subsection{Node.js e Express (Microsserviços de Backend)}
+As instâncias de processamento de votos foram construídas sobre o ambiente de execução \textbf{Node.js} e o framework \textbf{Express}:
+\begin{itemize}
+    \item \textbf{Arquitetura Orientada a Eventos e I/O Não Bloqueante:} O modelo de laço de eventos (\textit{Event Loop}) do Node.js permite gerenciar milhares de conexões HTTP concorrentes com baixo consumo de memória, ideal para a ingestão massiva de votos.
+    \item \textbf{Aderência ao Padrão \textit{Stateless}:} Nenhuma informação transacional ou contagem definitiva é retida na memória local do processo. Cada requisição é autossuficiente e delega a gravação persistente ao banco de dados compartilhado. Isso permite a adição, remoção ou reinício de contêineres de backend sem inconsistência ou perda de estado eleitoral.
+    \item \textbf{Metadados de Rastreabilidade:} Os nós expõem em suas respostas JSON o nome da instância configurada (\texttt{INSTANCE\_NAME}) e o identificador do contêiner (\texttt{os.hostname()}), tornando explícita a identificação da réplica responsável pelo atendimento de cada requisição.
+\end{itemize}
+
+\subsection{PostgreSQL 15 (Sistema Gerenciador de Banco de Dados)}
+O componente de dados utiliza a imagem oficial \textbf{PostgreSQL 15 Alpine}:
+\begin{itemize}
+    \item \textbf{Garantias ACID e Concorrência:} Suporta transações plenamente em conformidade com Atomicidade, Consistência, Isolamento e Durabilidade (ACID) sob alto volume de requisições concorrentes, prevenindo votos duplicados ou corrupções lógicas.
+    \item \textbf{Inicialização Automatizada:} Utiliza o diretório canônico \texttt{/docker-entrypoint-initdb.d/} para execução do script \texttt{database/init.sql}, criando as tabelas estruturadas de candidatos e votos na primeira subida do contêiner.
+\end{itemize}
+
+% ==============================================================================
+\section{Execução e Validação Experimental}
+% ==============================================================================
+Para demonstrar o cumprimento integral dos requisitos operacionais e das diretrizes da Prática 1, foram planejados e executados os seguintes procedimentos de teste:
+
+\subsection{Comprovação do Balanceamento de Carga}
+Com a infraestrutura ativa (\texttt{docker compose up -d}), foram disparadas requisições HTTP sequenciais e concorrentes contra o endereço \texttt{http://localhost:80/}. 
+
+O script de validação desenvolvido (\texttt{scripts/test\_load\_balancer.ps1} e \texttt{scripts/test\_load\_balancer.js}) inspeciona o campo \texttt{processadoPor.instancia} de cada payload JSON retornado:
+\begin{lstlisting}[language=bash, caption={Exemplo de resposta obtida ao consultar o Proxy Nginx}]
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{
+  "status": "online",
+  "mensagem": "Simulador de Votos - API ativa com Express",
+  "processadoPor": {
+    "instancia": "Instancia-1",
+    "hostname": "a1b2c3d4e5f6"
+  },
+  "timestamp": "2026-10-12T17:30:00.000Z"
+}
+\end{lstlisting}
+Ao submeter requisições subsequentes, o balanceador alterna dinamicamente o roteamento entre \texttt{Instancia-1} e \texttt{Instancia-2}, demonstrando a atuação do algoritmo \textit{Least Connections}.
+
+\subsection{Comprovação da Persistência de Dados e Tolerância a Falhas}
+O teste de resiliência e persistência obedece ao seguinte roteiro:
+\begin{enumerate}
+    \item Inserção de votos na base de dados por meio de chamadas \texttt{POST /votar};
+    \item Consulta e contagem dos registros existentes na tabela de votos;
+    \item Derrubada forçada do contêiner do PostgreSQL:
+    \begin{lstlisting}[language=bash]
+    docker stop db_postgres
+    \end{lstlisting}
+    \item Verificação do comportamento da API durante a indisponibilidade do banco;
+    \item Reinício do contêiner de banco:
+    \begin{lstlisting}[language=bash]
+    docker start db_postgres
+    \end{lstlisting}
+    \item Reavaliação dos registros na tabela, atestando que os dados persistem inalterados graças ao Docker Volume \texttt{pgdata}.
+\end{enumerate}
+
+% ==============================================================================
+\section{Conclusão}
+% ==============================================================================
+A arquitetura distribuída desenvolvida consolida os pilares fundamentais da gestão moderna de sistemas operacionais e microsserviços. O desacoplamento em camadas --- isolando a entrada via Proxy Reverso Nginx, o processamento sem estado das réplicas Node.js e o armazenamento durável no PostgreSQL --- permite que o sistema apresente alta escalabilidade horizontal, fácil manutenção e robusta tolerância a falhas. A utilização criteriosa de algoritmos de balanceamento de carga como o \textit{Least Connections} assegura a distribuição eficiente do trabalho e mitiga gargalos pontuais de processamento.
+
+% ==============================================================================
+\section{Repositório e Código-Fonte}
+% ==============================================================================
+Os códigos-fonte completos, manifestos de configuração e scripts auxiliares encontram-se versionados no repositório do projeto:
+\begin{itemize}
+    \item \textbf{Repositório GitHub:} \url{https://github.com/WilliamDLeao/Simulador-de-Votos}
+    \item \textbf{Manifesto Docker Compose:} \texttt{docker-compose.yml}
+    \item \textbf{Configuração do Proxy:} \texttt{nginx/nginx.conf}
+    \item \textbf{Script de Banco de Dados:} \texttt{database/init.sql}
+    \item \textbf{Scripts de Teste de Alternância:} \texttt{scripts/test\_load\_balancer.ps1} e \texttt{scripts/test\_load\_balancer.js}
+\end{itemize}
+
+\end{document}
