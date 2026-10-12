@@ -1,8 +1,3 @@
--- ============================================================================
--- SCRIPT DE INICIALIZAÇÃO DO BANCO DE DADOS (PostgreSQL 15)
--- Projeto: Simulador de Votos
--- ============================================================================
-
 CREATE TABLE IF NOT EXISTS candidatos (
     id SERIAL PRIMARY KEY,
     numero INT UNIQUE NOT NULL,
@@ -18,9 +13,8 @@ CREATE TABLE IF NOT EXISTS votos (
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Inserção de candidatos iniciais para validação do sistema
 INSERT INTO candidatos (numero, nome, partido, total_votos) VALUES
-(10, 'Candidato Alpha', 'Partido da Inovação', 0),
-(20, 'Candidato Beta', 'Partido da Estabilidade', 0),
+(10, 'Candidato A', 'Partido A', 0),
+(20, 'Candidato B', 'Partido B', 0),
 (99, 'Voto Nulo / Branco', 'Nenhum', 0)
 ON CONFLICT (numero) DO NOTHING;

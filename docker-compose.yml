@@ -1,7 +1,6 @@
 services:
-  # ============================================================================
   # PROXY REVERSO E BALANCEADOR DE CARGA (NGINX)
-  # ============================================================================
+ 
   nginx:
     image: nginx:alpine
     container_name: proxy_nginx
@@ -17,9 +16,9 @@ services:
     networks:
       - rede_votacao
 
-  # ============================================================================
+
   # INSTÂNCIA 1 DA API (Node.js / Express)
-  # ============================================================================
+
   api1:
     build:
       context: ./backend

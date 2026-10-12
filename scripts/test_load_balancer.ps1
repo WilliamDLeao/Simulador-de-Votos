@@ -1,6 +1,4 @@
-# ==============================================================================
-# Script de Validação de Balanceamento de Carga (PowerShell)
-# ==============================================================================
+
 param(
     [int]$TotalRequisicoes = 10,
     [string]$Url = "http://localhost:80"
