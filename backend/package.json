@@ -1,0 +1,12 @@
+{
+  "name": "api-votacao",
+  "version": "1.0.0",
+  "description": "API em Node.js com Express para o Simulador de Votos",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

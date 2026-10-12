@@ -1,0 +1,28 @@
+services:
+  # ============================================================================
+  # INSTÂNCIA 1 DA API
+  # ============================================================================
+  api1:
+    build:
+      context: ./backend
+    container_name: api_instancia_1
+    ports:
+      # Porta 5001 do seu computador -> Porta 5000 do Container
+      - "5001:5000"
+    environment:
+      - INSTANCE_NAME=Instancia-1
+      - PORT=5000
+
+  # ============================================================================
+  # INSTÂNCIA 2 DA API (Mesmo código, container separado)
+  # ============================================================================
+  api2:
+    build:
+      context: ./backend
+    container_name: api_instancia_2
+    ports:
+      # Porta 5002 do seu computador -> Porta 5000 do Container
+      - "5002:5000"
+    environment:
+      - INSTANCE_NAME=Instancia-2
+      - PORT=5000
