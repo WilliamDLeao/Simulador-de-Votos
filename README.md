@@ -18,8 +18,12 @@ Simulador-de-Votos/
 │   └── ...
 ├── database/                  # [Squad 3] Scripts de banco e schema
 │   └── init.sql
-├── scripts/                   # [Squad 4] Scripts de validação e teste de carga
-│   └── ...
+├── scripts/                   # [Squad 4] Scripts de validação, stress e teste de carga
+│   ├── test_load_balancer.js      # Alternância/latência via GET /
+│   ├── test_load_balancer.ps1     # Demonstração sequencial (Windows)
+│   ├── stress_votacao.js          # Stress de POST /votar + integridade dos votos
+│   ├── comparar_balanceadores.sh  # RR × least_conn (e outros) automatizado
+│   └── resultados/                # CSVs gerados pelos testes (não versionados)
 └── docs/                      # [Squad 4] Relatório técnico em LaTeX
     └── main.tex
 ```
@@ -102,7 +106,56 @@ curl -X POST http://localhost/votar \
 
 ---
 
-### 2. Testar Resiliência do Banco de Dados (Requisito Prático)
+### 2. Stress do Caminho de Escrita (`POST /votar`)
+
+O `test_load_balancer.js` mede alternância com `GET /`, mas **não exercita o banco** (a rota de saúde responde 200 mesmo com o Postgres fora). Para stress de verdade, use o `stress_votacao.js`, que grava votos, mede latência/vazão e **valida a integridade** (votos contabilizados == requisições com sucesso).
+
+```bash
+# Stress básico: 200 votos, 20 simultâneos
+node ./scripts/stress_votacao.js
+
+# Carga maior, gravando o resultado em CSV
+node ./scripts/stress_votacao.js --total 1000 --concorrencia 50 \
+  --cenario carga-pesada --csv ./scripts/resultados/carga.csv
+
+# Falha injetada: derruba a Instancia-2 no meio da carga e religa após 6s
+node ./scripts/stress_votacao.js --total 1000 --concorrencia 50 \
+  --derrubar api_instancia_2
+
+# Ver todas as opções
+node ./scripts/stress_votacao.js --ajuda
+```
+
+O script faz aquecimento, lê a apuração antes/depois, compara com a contagem da tabela `votos` (via `docker exec`) e imprime um veredito **OK/FALHA**. Erros 502/503 durante a janela de `fail_timeout` do Nginx são esperados no teste de falha.
+
+---
+
+### 3. Comparar Algoritmos de Balanceamento (automático)
+
+O comparador alterna o algoritmo em `nginx/nginx.conf`, recarrega o Nginx sem parar o container, roda N rodadas de stress para cada cenário e gera um resumo com medianas — exatamente o que o roteiro pede (avaliar escalonamentos tendo o **Round-Robin como baseline**).
+
+```bash
+# RR × Least Connections, 3 rodadas cada
+./scripts/comparar_balanceadores.sh
+
+# Mais carga e mais rodadas
+./scripts/comparar_balanceadores.sh --rodadas 5 --total 500 --concorrencia 40
+
+# Incluir também IP Hash e ponderado (weight=3 / weight=1)
+./scripts/comparar_balanceadores.sh --algoritmos "rr least_conn ip_hash weighted"
+```
+
+Saídas:
+- `scripts/resultados/comparacao_<timestamp>.csv` — uma linha por rodada;
+- `scripts/resultados/comparacao_<timestamp>_resumo.csv` — medianas por cenário.
+
+O `nginx.conf` original é restaurado automaticamente ao final. Requer Docker acessível sem `sudo` (ou rode com `sudo`) e Node.js instalado.
+
+> **Expectativa para o relatório:** com respostas rápidas e uniformes, `least_conn` fica próximo do Round-Robin. A diferença aparece quando há latência heterogênea (contenção no Postgres, `pool max: 10` por API). O `ip_hash` tende a concentrar tudo em uma instância quando o cliente é único (o próprio script), o que também é um resultado válido a discutir.
+
+---
+
+### 4. Testar Resiliência do Banco de Dados (Requisito Prático)
 
 Demonstração de que a interrupção do banco não corrompe nem perde dados, graças ao **Docker Volume**:
 
@@ -119,7 +172,7 @@ docker exec -it db_postgres psql -U postgres -d votacao -c "SELECT * FROM candid
 
 ---
 
-### 3. Alternar Algoritmo de Balanceamento (Nginx)
+### 5. Alternar Algoritmo de Balanceamento Manualmente (Nginx)
 
 O Nginx está configurado por padrão com **Least Connections** (`least_conn`).
 

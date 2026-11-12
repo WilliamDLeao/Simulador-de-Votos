@@ -1,0 +1,3 @@
+# Resultados gerados pelos scripts de stress/comparação.
+# Os CSV são artefatos de execução: não versionar (anexe ao relatório quando necessário).
+*.csv
