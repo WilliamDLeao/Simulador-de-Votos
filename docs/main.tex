@@ -147,8 +147,8 @@ A Tabela~\ref{tab:containers} resume as características e as configurações do
 \textbf{Serviço} & \textbf{Nome do Contêiner} & \textbf{Imagem Base} & \textbf{Porta Externa} & \textbf{Porta Interna} \\
 \midrule
 \texttt{nginx} & \texttt{proxy\_nginx} & \texttt{nginx:alpine} & 80 (TCP) & 80 \\
-\texttt{api1} & \texttt{api\_instancia\_1} & \textit{Custom} (Node 18 Alpine) & Nenhuma & 5000 \\
-\texttt{api2} & \texttt{api\_instancia\_2} & \textit{Custom} (Node 18 Alpine) & Nenhuma & 5000 \\
+\texttt{api1} & \texttt{api\_instancia\_1} & \textit{Custom} (Node 20 Alpine, v20.20.2) & Nenhuma & 5000 \\
+\texttt{api2} & \texttt{api\_instancia\_2} & \textit{Custom} (Node 20 Alpine, v20.20.2) & Nenhuma & 5000 \\
 \texttt{db} & \texttt{db\_postgres} & \texttt{postgres:15-alpine} & Nenhuma & 5432 \\
 \bottomrule
 \end{tabular}
@@ -194,7 +194,7 @@ A persistência do banco de dados relacional foi implementada com o volume geren
 \end{itemize}
 
 \subsection{Microsserviços de Backend (Node.js e Express)}
-Os nós de processamento foram desenvolvidos em JavaScript sob o ambiente de execução Node.js (imagem \texttt{node:18-alpine}):
+Os nós de processamento foram desenvolvidos em JavaScript sob o ambiente de execução Node.js (imagem \texttt{node:20-alpine}, versão v20.20.2 verificada nos contêineres):
 \begin{itemize}
     \item \textbf{Arquitetura Orientada a Eventos e I/O Não Bloqueante:} Utiliza o \textit{Event Loop} do Node.js e um pool gerenciado de conexões de banco de dados com a biblioteca \texttt{pg} (tamanho máximo de 10 conexões concorrentes por instância).
     \item \textbf{Modelo Rigorosamente \textit{Stateless}:} As instâncias não gravam sessões ou contagens parciais na memória local do processo. Toda operação é atômica e transferida ao banco de dados relacional, permitindo que qualquer réplica atenda a qualquer requisição sem risco de inconsistência.
@@ -238,6 +238,40 @@ INSERT INTO candidatos (numero, nome, partido, total_votos) VALUES
 ON CONFLICT (numero) DO NOTHING;
 \end{lstlisting}
 
+\subsection{Ambiente de Execução --- Notebook e Configuração do Sistema}
+As medições da Seção~4 foram realizadas em \textbf{19/11/2026}, com o notebook operando no \textbf{perfil de desempenho (economia de bateria desativada)}. O ambiente físico e as versões de software utilizados foram:
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{p{3.9cm}p{10.2cm}}
+\toprule
+\textbf{Item} & \textbf{Configuração observada} \\
+\midrule
+Notebook & Acer \textbf{Nitro ANV15-51} (placa \texttt{Sportage\_RTH}, BIOS V1.60 de 08/04/2026), chassi \texttt{laptop} \\
+Host & \texttt{tutus-house} (usuário \texttt{tutu}) \\
+Processador & 13th Gen Intel(R) Core(TM) i5-13420H --- 8 núcleos físicos / 12 \textit{threads}, até 4,60 GHz, cache L3 de 12 MiB, x86-64, VT-x \\
+Perfil de energia & Economia de bateria \textbf{desativada} --- modo de desempenho \\
+Memória RAM & 7,5 GiB (~8 GB); \textit{swap} de 7,5 GiB em \texttt{/dev/nvme0n1p6} \\
+Armazenamento & SSD NVMe \texttt{/dev/nvme0n1p7}: 54 GB no total, ~12 GB livres no momento dos testes (78\% ocupado) \\
+Sistema operacional & \textbf{Linux Mint 22.3 (Zena)}, kernel \texttt{6.17.0-35-generic}, x86-64 \\
+Fuso horário & \texttt{America/Sao\_Paulo} (UTC-3), relógio sincronizado por NTP \\
+Docker Engine & \textbf{29.9.3} (Community), API 1.56, Go 1.26.10, containerd v2.4.2, runc 1.5.2 \\
+Docker Compose & \textbf{v5.7.0} \\
+Docker --- runtime & driver \texttt{overlayfs}, cgroup driver \texttt{systemd}, \textbf{cgroup v2}, runtime \texttt{runc}, raiz \texttt{/var/lib/docker} \\
+Recursos ao daemon & \texttt{NCPU=12}, \texttt{MemTotal=8.014.266.368} bytes (~7,47 GiB) \\
+Node.js no host & v26.13.0 (script de teste) \\
+Node.js nos contêineres & v20.20.2 (imagem \texttt{node:20-alpine}) \\
+Nginx no contêiner & nginx/1.31.8 \\
+PostgreSQL no contêiner & psql 15.19 (imagem \texttt{postgres:15-alpine}) \\
+Carga média do host & \texttt{load average: 1,29, 0,76, 0,80} \\
+\bottomrule
+\end{tabular}
+\caption{Ambiente físico e de software do host de validação.}
+\label{tab:ambiente}
+\end{table}
+
+\textit{Observação metodológica:} o Docker executa \textbf{nativamente} sobre o kernel Linux do notebook (não em uma VM do Docker Desktop); portanto, os limites de CPU e memória percebidos pelos contêineres são os do próprio hardware, sem camada adicional de virtualização. Com a economia de bateria desativada, o processador pode operar em frequências mais altas (até 4,60 GHz), o que explica a ordem de grandeza das vazões e latências medidas. Os números são evidências de funcionamento em execuções curtas, não um \textit{benchmark} rigoroso.
+
 % ==============================================================================
 \section{Execução e Validação Experimental}
 % ==============================================================================
@@ -249,7 +283,7 @@ A inicialização completa da infraestrutura de microsserviços é realizada atr
 docker compose up --build -d
 \end{lstlisting}
 
-A inspeção do estado dos contêineres por meio de \texttt{docker compose ps} atesta a operacionalidade síncrona dos quatro serviços:
+A inspeção do estado dos contêineres por meio de \texttt{docker compose ps} atesta a operacionalidade síncrona dos quatro serviços, conforme ilustrado na Figura~\ref{fig:containers-running}:
 \begin{lstlisting}[language=bash]
 NAME                IMAGE                  COMMAND                  SERVICE   STATUS   PORTS
 api_instancia_1     simulador-votos-api1   "docker-entrypoint.s…"   api1      Up       5000/tcp
@@ -257,6 +291,13 @@ api_instancia_2     simulador-votos-api2   "docker-entrypoint.s…"   api2      
 db_postgres         postgres:15-alpine     "docker-entrypoint.s…"   db        Up       5432/tcp
 proxy_nginx         nginx:alpine           "/docker-entrypoint.…"   nginx     Up       0.0.0.0:80->80/tcp
 \end{lstlisting}
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=\textwidth]{../screenshots/containers-running.png}
+\caption{Evidência visual dos quatro contêineres ativos (\texttt{proxy\_nginx}, \texttt{api\_instancia\_1}, \texttt{api\_instancia\_2} e \texttt{db\_postgres}), com apenas a porta 80 publicada no hospedeiro.}
+\label{fig:containers-running}
+\end{figure}
 
 \subsection{Validação do Balanceamento de Carga e Alternância}
 Para validar o balanceamento de carga entre as réplicas da aplicação, foram desenvolvidos dois scripts dedicados:
@@ -271,115 +312,169 @@ node scripts/test_load_balancer.js 10
 \end{lstlisting}
 
 Obtém-se a alternância comprovada de nós nos registros de saída:
-\begin{lstlisting}[language=bash, caption={Saída da execução do script de teste de balanceamento}]
+\begin{lstlisting}[language=bash, caption={Saída da execução do script de teste de balanceamento, obtida em 19/11/2026}]
 ==============================================================================
 SIMULADOR DE CARGA E BENCHMARK DE LATENCIA -- NGINX
 * URL Alvo:         http://localhost:80/
 * Total de Carga:   10 requisicoes
 * Concorrencia:     1 simultanea(s)
 ==============================================================================
-[Req #001] Status: 200 | Respondido por: Instancia-1  | Container: 89ab31cd | Latencia: 14.8 ms
-[Req #002] Status: 200 | Respondido por: Instancia-2  | Container: 47ef90ba | Latencia: 12.3 ms
-[Req #003] Status: 200 | Respondido por: Instancia-1  | Container: 89ab31cd | Latencia: 11.7 ms
-[Req #004] Status: 200 | Respondido por: Instancia-2  | Container: 47ef90ba | Latencia: 13.1 ms
-[Req #005] Status: 200 | Respondido por: Instancia-1  | Container: 89ab31cd | Latencia: 10.9 ms
-[Req #006] Status: 200 | Respondido por: Instancia-2  | Container: 47ef90ba | Latencia: 12.0 ms
-[Req #007] Status: 200 | Respondido por: Instancia-1  | Container: 89ab31cd | Latencia: 11.2 ms
-[Req #008] Status: 200 | Respondido por: Instancia-2  | Container: 47ef90ba | Latencia: 10.8 ms
-[Req #009] Status: 200 | Respondido por: Instancia-1  | Container: 89ab31cd | Latencia: 11.5 ms
-[Req #010] Status: 200 | Respondido por: Instancia-2  | Container: 47ef90ba | Latencia: 11.9 ms
+[Req #001] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latencia:   12.9 ms
+[Req #002] Status: 200 | Respondido por: Instancia-1  | Container: 0cb33ff8 | Latencia:   2.70 ms
+[Req #003] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latencia:   1.35 ms
+[Req #004] Status: 200 | Respondido por: Instancia-1  | Container: 0cb33ff8 | Latencia:   4.35 ms
+[Req #005] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latencia:   1.56 ms
+[Req #006] Status: 200 | Respondido por: Instancia-1  | Container: 0cb33ff8 | Latencia:   1.60 ms
+[Req #007] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latencia:   1.61 ms
+[Req #008] Status: 200 | Respondido por: Instancia-1  | Container: 0cb33ff8 | Latencia:   1.61 ms
+[Req #009] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latencia:   1.53 ms
+[Req #010] Status: 200 | Respondido por: Instancia-1  | Container: 0cb33ff8 | Latencia:   1.04 ms
 
 ==============================================================================
 RESUMO DO BALANCEAMENTO E PERFORMANCE
 ==============================================================================
-* Requisicoes com sucesso: 10 de 10 (0 erros)
-* Distribuicao de Carga:
-  - Instancia-1   : 5 reqs (50.0%) | Latencia Media: 12.0 ms
-  - Instancia-2   : 5 reqs (50.0%) | Latencia Media: 12.0 ms
+* Tempo total do teste:    0.03 segundos
+* Vazao (Throughput):      301.7 requisicoes/segundo
+* Requisicoes com sucesso: 10 de 10
+
+DISTRIBUICAO DE CARGA ENTRE AS INSTANCIAS:
+  - Instancia-2   : 5 reqs (50.0%) | Latencia Media: 3.80 ms (Min: 1.35 ms / Max: 12.9 ms)
+  - Instancia-1   : 5 reqs (50.0%) | Latencia Media: 2.26 ms (Min: 1.04 ms / Max: 4.35 ms)
+
+METRICAS GERAIS DE LATENCIA (Resposta do Nginx):
+  - Minima: 1.04 ms
+  - Media:  3.03 ms
+  - P50 (Mediana): 1.61 ms
+  - P95:    12.9 ms
+  - Maxima: 12.9 ms
 \end{lstlisting}
 
-A saída comprova que o Nginx distribui o fluxo perfeitamente entre os contêineres identificados pelos IDs \texttt{89ab31cd} e \texttt{47ef90ba}.
+A saída comprova que o Nginx distribui o fluxo perfeitamente entre os contêineres identificados pelos IDs \texttt{0cb33ff8} e \texttt{5eaf4bfa}. A primeira requisição foi atendida pela \texttt{Instancia-2} porque o \texttt{least\_conn} escolhe a réplica com menos conexões ativas no instante da chegada; a alternância 5/5 confirma o escalonamento. O cabeçalho \texttt{X-Upstream-Backend} confirma o endereço interno do backend escolhido em cada resposta.
 
-\subsection{Avaliação Comparativa: \textit{Least Connections} versus \textit{Round-Robin}}
-O roteiro prático solicita a avaliação dos algoritmos de escalonamento tendo como referência (\textit{baseline}) o método \textit{Round-Robin}:
-\begin{itemize}
-    \item \textbf{Round-Robin (Baseline):} Distribui requisições em ordem cíclica alternada estrita ($1 \rightarrow 2 \rightarrow 1 \rightarrow 2$). Assume a premissa de que todas as requisições consomem exatamente o mesmo tempo de CPU e I/O. Caso a Instância 1 receba uma consulta pesada e demorada (ex.: agregação complexa de votos), o Round-Robin continuará despachando a próxima requisição par para ela, gerando acúmulo de requisições na fila de conexões daquela réplica.
-    \item \textbf{Least Connections (\texttt{least\_conn} --- Implementado):} Monitora as conexões ativas estabelecidas pelo proxy com cada nó de backend. A nova requisição é roteada para a instância com menor carga concorrente no instante da chegada. Diante de tempos de resposta heterogêneos do banco de dados, o \textit{Least Connections} provou ser superior por equalizar o estresse dos recursos da máquina hospedeira.
-\end{itemize}
-
-A comutação entre algoritmos pode ser realizada de forma limpa sem interrupção de serviço, bastando comentar a diretiva \texttt{least\_conn;} em \texttt{nginx/nginx.conf} e recarregar os processos de trabalho via:
+\subsection{Avaliação Experimental: \textit{Round-Robin} (baseline) versus \textit{Least Connections}}
+O roteiro prático solicita a avaliação dos escalonamentos tendo o \textit{Round-Robin} como \textit{baseline}. Para medir os dois algoritmos, a diretiva \texttt{least\_conn;} foi temporariamente comentada na coleta do baseline e depois reativada. A troca foi aplicada a quente, sem reiniciar os contêineres:
 \begin{lstlisting}[language=bash]
-docker exec proxy_nginx nginx -s reload
+docker exec proxy_nginx nginx -t          # valida a sintaxe
+docker exec proxy_nginx nginx -s reload   # aplica a configuracao
 \end{lstlisting}
+
+Para cada algoritmo foram executadas três repetições de \texttt{node scripts/test\_load\_balancer.js 50 10} (50 requisições GET, 10 concorrentes). A Tabela~\ref{tab:escalonamentos} resume os resultados obtidos.
+
+\begin{table}[h!]
+\centering
+\caption{Comparação entre os algoritmos de escalonamento (3 execuções de 50 requisições, concorrência 10).}
+\label{tab:escalonamentos}
+\begin{tabular}{lcccc}
+\toprule
+Algoritmo & Distribuição (I1/I2) & Latência média & P95 & Vazão \\
+\midrule
+\textit{Round-Robin} (1) & 25/25 (50\%/50\%) & 15,3 ms & 58,3 ms & 590,2 req/s \\
+\textit{Round-Robin} (2) & 25/25 (50\%/50\%) & 6,19 ms & 14,7 ms & 1350,9 req/s \\
+\textit{Round-Robin} (3) & 25/25 (50\%/50\%) & 6,40 ms & 17,4 ms & 1351,9 req/s \\
+\textbf{Média \textit{Round-Robin}} & \textbf{50\%/50\%} & \textbf{9,30 ms} & \textbf{30,13 ms} & \textbf{1097,7 req/s} \\
+\texttt{least\_conn} (1) & 27/23 (54\%/46\%) & 4,45 ms & 10,1 ms & 1896,0 req/s \\
+\texttt{least\_conn} (2) & 27/23 (54\%/46\%) & 5,21 ms & 13,9 ms & 1613,9 req/s \\
+\texttt{least\_conn} (3) & 28/22 (56\%/44\%) & 5,40 ms & 15,8 ms & 1609,9 req/s \\
+\textbf{Média \texttt{least\_conn}} & \textbf{$\approx$54\%/46\%} & \textbf{5,02 ms} & \textbf{13,27 ms} & \textbf{1706,6 req/s} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O \textit{Round-Robin} foi determinístico: 25 requisições para cada instância nas três execuções. A primeira medição foi penalizada pelo \textit{cold start} (P95 de 58,3 ms, incluindo o estabelecimento das primeiras conexões e o aquecimento do \textit{pool} do PostgreSQL); já aquecido, ficou entre 6,19 ms e 6,40 ms de latência média e P95 de 14,7 ms a 17,4 ms. O \texttt{least\_conn} apresentou distribuição adaptativa (54/46, 54/46 e 56/44) e menor latência média nas três repetições (4,45 ms, 5,21 ms e 5,40 ms), com vazão entre 1609,9 e 1896,0 req/s.
+
+Neste experimento, realizado no notebook da Seção~\ref{tab:ambiente}, o \texttt{least\_conn} saiu numericamente à frente em todas as repetições (médias de 5,02 ms contra 9,30 ms; P95 de 13,27 ms contra 30,13 ms; vazão de 1706,6 contra 1097,7 req/s). Parte da diferença é atribuível ao fato de o \textit{baseline} ter sido medido \textbf{primeiro}, absorvendo o \textit{cold start}; mesmo comparando apenas as execuções aquecidas a vantagem se mantém, porém menor ($\approx$5,3 ms contra $\approx$6,3 ms), e as faixas de P95 se sobrepõem parcialmente (14,7--17,4 ms contra 10,1--15,8 ms). Portanto, \textbf{não se afirma superioridade rigorosa}: o resultado é uma tendência favorável, coerente com o domínio do problema. Com requisições de custo desigual (por exemplo, \texttt{POST /votar} com contenção de gravação ou \texttt{GET /apuracao} mais lenta), o \texttt{least\_conn} desvia o fluxo da réplica com mais conexões ativas, enquanto o \textit{Round-Robin} enviaria a próxima requisição por mera ordem cíclica. O \texttt{least\_conn} permanece como configuração final e o \textit{Round-Robin} está documentado como \textit{baseline}, atendendo ao roteiro.
+
+\textit{Nota metodológica:} os números são de execuções curtas no mesmo host e servem como evidência de funcionamento e tendência, não como \textit{benchmark} rigoroso. O script mede a latência ponta a ponta no cliente, incluindo conexão e \textit{keepalive} do Nginx. A ordem de execução (\textit{Round-Robin} primeiro, \texttt{least\_conn} depois) é um viés conhecido deste experimento.
 
 \subsection{Comprovação da Persistência de Dados e Tolerância a Falhas}
 O teste de resiliência e validação do Docker Volume seguiu a seguinte sequência operacional:
 
+Antes da inserção dos votos de teste, o volume \texttt{pgdata} continha \textbf{2570 votos}; portanto os totais absolutos abaixo são elevados. O que se valida é a \textbf{igualdade antes/depois}, não o valor absoluto.
+
 \begin{enumerate}
-    \item \textbf{Registro de Votos:} Foram efetuadas requisições de voto para os candidatos através da rota \texttt{POST /votar}:
+    \item \textbf{Registro de Votos:} Foram efetuadas duas requisições de voto pela rota \texttt{POST /votar}, atendidas por instâncias diferentes (o que também reconfirma o balanceamento):
     \begin{lstlisting}[language=bash]
     curl -X POST http://localhost/votar -H "Content-Type: application/json" -d '{"numero": 10}'
     curl -X POST http://localhost/votar -H "Content-Type: application/json" -d '{"numero": 20}'
     \end{lstlisting}
+    \begin{lstlisting}[language=bash]
+    { "sucesso": true, "mensagem": "Voto computado com sucesso para Candidato A (10)!",
+      "candidato": { "numero": 10, "nome": "Candidato A", "totalVotosAtualizado": 2534 },
+      "processadoPor": { "instancia": "Instancia-2", "hostname": "5eaf4bfaecb3" },
+      "timestamp": "2026-11-19T16:55:30.939Z" }
+    \end{lstlisting}
     
-    \item \textbf{Consulta de Apuração Inicial:} A chamada a \texttt{GET /apuracao} confirmou os votos persistidos no banco de dados.
+    \item \textbf{Consulta de Apuração Inicial:} A chamada a \texttt{GET /apuracao} confirmou os votos persistidos: \texttt{totalVotosGeral = 2572} (2534 para o Candidato A, 38 para o Candidato B e 0 nulos).
     
     \item \textbf{Derrubada Forçada do SGBD:} O contêiner de banco de dados foi deliberadamente finalizado com:
     \begin{lstlisting}[language=bash]
     docker stop db_postgres
     \end{lstlisting}
+    O comando \texttt{docker ps --filter name=db\_postgres} confirmou o contêiner fora do ar.
     
-    \item \textbf{Comportamento da Aplicação Sob Falha:} Ao consultar a API com o banco fora do ar, o backend lidou com o erro de forma graciosa através do manipulador \texttt{respostaErroBanco}, retornando código de status \texttt{HTTP 503 Service Unavailable} com mensagem explicativa estruturada em JSON, demonstrando tratamento defensivo sem travamento dos processos Node.js:
+    \item \textbf{Comportamento da Aplicação Sob Falha:} Ao consultar a API com o banco fora do ar, o backend lidou com o erro de forma graciosa pelo manipulador \texttt{respostaErroBanco}, retornando \texttt{HTTP 503 Service Unavailable} sem travar os processos Node.js:
     \begin{lstlisting}[language=bash]
-    HTTP/1.1 503 Service Unavailable
     {
       "sucesso": false,
       "mensagem": "Banco de dados temporariamente indisponivel",
-      "processadoPor": { "instancia": "Instancia-1" }
+      "erro": "Connection terminated due to connection timeout",
+      "processadoPor": { "instancia": "Instancia-1", "hostname": "0cb33ff83fe4" },
+      "timestamp": "2026-11-19T16:55:39.114Z"
     }
     \end{lstlisting}
+    O \textit{health check} \texttt{GET /} continuou respondendo \texttt{HTTP 200} com \texttt{"status":"online"} e \texttt{"banco":"desconectado"}, evidenciando que apenas a camada de dados estava fora.
 
-    \item \textbf{Recuperação do Contêiner:} O serviço do banco de dados foi reiniciado:
+    \item \textbf{Recuperação do Contêiner:} O banco foi reiniciado e, após 12 segundos, apresentava status \texttt{Up}:
     \begin{lstlisting}[language=bash]
     docker start db_postgres
     \end{lstlisting}
 
-    \item \textbf{Verificação de Integridade dos Dados:} Com o banco ativo novamente, uma nova requisição a \texttt{GET /apuracao} atestou que os totais de votos dos candidatos estavam intactos:
+    \item \textbf{Verificação de Integridade dos Dados:} Com o banco ativo novamente, \texttt{GET /apuracao} devolveu \textbf{exatamente o mesmo total (2572)} e a inspeção SQL direta confirmou os mesmos valores gravados no volume:
     \begin{lstlisting}[language=bash]
     curl http://localhost/apuracao
-    
     {
       "sucesso": true,
-      "totalVotosGeral": 2,
+      "totalVotosGeral": 2572,
       "apuracao": [
-        { "numero": 10, "nome": "Candidato A", "total_votos": 1, "percentual": "50.00%" },
-        { "numero": 20, "nome": "Candidato B", "total_votos": 1, "percentual": "50.00%" },
+        { "numero": 10, "nome": "Candidato A", "total_votos": 2534, "percentual": "98.52%" },
+        { "numero": 20, "nome": "Candidato B", "total_votos": 38, "percentual": "1.48%" },
         { "numero": 99, "nome": "Voto Nulo / Branco", "total_votos": 0, "percentual": "0.00%" }
       ]
     }
+
+    numero |        nome        | total_votos
+    --------+--------------------+-------------
+         10 | Candidato A        |        2534
+         20 | Candidato B        |          38
+         99 | Voto Nulo / Branco |           0
+    (3 rows)
     \end{lstlisting}
 \end{enumerate}
-Esse experimento comprova a eficácia do Docker Volume \texttt{pgdata}, demonstrando que o estado transacional persiste inalterado à destruição temporária do contêiner.
+Esse experimento comprova a eficácia do Docker Volume \texttt{pgdata}: \textbf{2572 votos antes do \texttt{docker stop} e 2572 depois do \texttt{docker start} --- nenhum voto foi perdido}.
 
 \subsection{Comprovação do Isolamento de Rede}
 Para comprovar o isolamento de rede proporcionado pela \texttt{rede\_votacao}, executou-se a tentativa de conexão direta do hospedeiro nas portas internas dos microsserviços:
 \begin{lstlisting}[language=bash]
 # Tentativa de conexao direta com a API
 curl http://localhost:5000/
-# Saida: curl: (7) Failed to connect to localhost port 5000: Connection refused
+# curl: (7) Failed to connect to localhost:5000 after 0 ms: Could not connect to server
 
 # Tentativa de conexao direta com o PostgreSQL
-curl telnet://localhost:5432
-# Saida: Falha na conexao (porta fechada na interface do hospedeiro)
+curl http://localhost:5432
+# curl: (7) Failed to connect to localhost:5432 after 0 ms: Could not connect to server
+
+# Controle: porta publica do proxy
+curl -o /dev/null -w 'HTTP %{http_code}\n' http://localhost/
+# HTTP 200
 \end{lstlisting}
-Como esperado, as conexões foram rejeitadas na interface do host. O acesso aos dados e aos nós computacionais ocorre com exclusividade por meio do proxy reverso na porta 80, atendendo rigorosamente ao requisito de segurança e isolamento.
+Como esperado, as conexões foram rejeitadas imediatamente (\texttt{after 0 ms}) na interface do host: as portas \texttt{5000} e \texttt{5432} não possuem publicação (\texttt{ports:}) no \texttt{docker-compose.yml} e, portanto, não há \textit{socket} escutando no hospedeiro. O acesso aos dados e aos nós computacionais ocorre com exclusividade por meio do proxy reverso na porta 80 (controle: \texttt{HTTP 200}), atendendo ao requisito de segurança e isolamento. O cabeçalho \texttt{X-Upstream-Backend} também foi conferido nas respostas do proxy (por exemplo, \texttt{X-Upstream-Backend: 172.18.0.4:5000}).
 
 % ==============================================================================
 \section{Conclusão}
 % ==============================================================================
 A execução desta etapa prática consolidou na prática os conceitos fundamentais de Sistemas Operacionais Modernos e arquitetura de microsserviços distribuídos. Observou-se como a conteinerização baseada em \textit{Namespaces} e \textit{cgroups} permite instanciar ambientes de computação isolados, leves e reprodutíveis sem o peso computacional de máquinas virtuais tradicionais.
 
-O desacoplamento estrito entre camadas --- delegando ao Nginx a função de porteiro de borda com escalonamento por menor número de conexões (\textit{Least Connections}), aos nós de backend Node.js o papel de executores sem estado (\textit{stateless}), e ao PostgreSQL 15 a responsabilidade de persistência durável via Docker Volume --- assegurou alta disponibilidade, tolerância ativa a falhas e proteção de rede interna. O sistema desenvolvido atende plenamente a todos os requisitos solicitados para a Prática 1.
+O desacoplamento estrito entre camadas --- delegando ao Nginx a função de porteiro de borda com escalonamento por menor número de conexões (\textit{Least Connections}), aos nós de backend Node.js o papel de executores sem estado (\textit{stateless}), e ao PostgreSQL 15 a responsabilidade de persistência durável via Docker Volume --- assegurou alta disponibilidade, tolerância a falhas e proteção de rede interna. A validação, realizada em 19/11/2026 no notebook Acer Nitro ANV15-51 (Seção~4.2 e Tabela~\ref{tab:ambiente}), confirmou a alternância 50/50 entre as instâncias e a distribuição adaptativa do \texttt{least\_conn} (54/46 a 56/44). Neste experimento, o \texttt{least\_conn} apresentou menor latência média (5,02 ms contra 9,30 ms) e maior vazão (1706,6 contra 1097,7 req/s), embora parte da diferença seja atribuível ao \textit{cold start} do \textit{baseline}, medido primeiro (Seção~4.3). O teste de persistência manteve os 2572 votos intactos após \texttt{docker stop} e \texttt{docker start} do banco, e o teste de isolamento confirmou a recusa de acesso direto às portas internas. O sistema desenvolvido atende plenamente a todos os requisitos solicitados para a Prática 1.
 
 % ==============================================================================
 \section{Repositório e Código-Fonte}
