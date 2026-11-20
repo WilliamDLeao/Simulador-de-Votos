@@ -350,7 +350,51 @@ A inspeção SQL direta confirmou os mesmos valores gravados no volume:
 
 ---
 
-### 4.5. Teste de Isolamento de Rede
+### 4.5. Teste de Falha de um Container Individual
+
+Além da queda do banco (Seção 4.4), foi desenvolvido o script `scripts/demo_falha_container.sh`, que generaliza o teste para qualquer um dos quatro containers (`proxy_nginx`, `api_instancia_1`, `api_instancia_2` e `db_postgres`). O objetivo é provar que a falha de **um** componente não derruba os demais e que nenhum voto confirmado é perdido.
+
+#### Como executar
+
+Com a stack no ar (`docker compose up --build -d`) e a partir da raiz do projeto:
+
+```bash
+bash scripts/demo_falha_container.sh [container] [votos]
+bash scripts/demo_falha_container.sh                      # api_instancia_1, 20 votos
+bash scripts/demo_falha_container.sh api_instancia_2 50
+bash scripts/demo_falha_container.sh db_postgres 20
+```
+
+Para acompanhar visualmente, em dois outros terminais (no Git Bash, onde `watch` não existe):
+
+```bash
+while true; do clear; docker ps -a --format "table {{.Names}}\t{{.Status}}"; sleep 1; done
+while true; do clear; docker exec db_postgres psql -U postgres -d votacao -c "SELECT numero, nome, total_votos FROM candidatos ORDER BY numero;"; sleep 1; done
+```
+
+#### Procedimento do script
+
+1. Exibe o estado dos 4 containers.
+2. Registra a contagem de votos antes da falha (soma de `candidatos.total_votos` e quantidade de linhas na tabela de auditoria `votos`).
+3. Executa `docker stop` no container-alvo (queda controlada e repetível, conforme o roteiro da prática).
+4. Envia `N` requisições `POST /votar` pelo Nginx com o alvo fora do ar, contando as confirmadas (HTTP 200) e a instância que atendeu cada uma.
+5. Exibe novamente o estado dos containers, mostrando que os demais seguem em execução.
+6. Executa `docker start` no alvo (se for o banco, aguarda `pg_isready`).
+7. Compara a contagem final com a esperada (`antes + votos confirmados`) e imprime `OK` ou `ATENÇÃO`.
+
+#### Critério de sucesso e comportamento esperado
+
+| Alvo | Durante a falha | Resultado esperado |
+| :--- | :--- | :--- |
+| `api_instancia_1` ou `api_instancia_2` | O Nginx isola a instância indisponível (`max_fails`/`fail_timeout`) e envia o fluxo à saudável | 100% dos votos confirmados; contagem final = antes + enviados |
+| `db_postgres` | A API responde HTTP 503 | Votos recusados não são contabilizados; dados anteriores preservados pelo Docker Volume |
+| `proxy_nginx` | Porta 80 sem resposta | Nenhum voto confirmado; dados intactos |
+
+O teste é aprovado quando a soma dos contadores e o número de registros em `votos` coincidem com o valor esperado (`OK` ao final).
+
+<!-- TODO: colar aqui a saída real da execução (e prints dos terminais de acompanhamento) como evidência. -->
+
+### 4.6. Teste de Isolamento de Rede
 
 Comprovando o isolamento da Docker Network `rede_votacao`, tentou-se conexão direta às portas dos serviços a partir do terminal do hospedeiro:
 
@@ -395,5 +439,6 @@ O código-fonte completo, scripts e documentações do projeto estão disponíve
 - **Microsserviço de Backend Node.js:** [`backend/server.js`](../backend/server.js) e [`backend/Dockerfile`](../backend/Dockerfile)
 - **Definição do Esquema Relacional:** [`database/init.sql`](../database/init.sql)
 - **Scripts de Validação e Benchmark:** [`scripts/test_load_balancer.ps1`](../scripts/test_load_balancer.ps1) e [`scripts/test_load_balancer.js`](../scripts/test_load_balancer.js)
+- **Troca de Algoritmo de Balanceamento:** [`scripts/trocar_algoritmo.sh`](../scripts/trocar_algoritmo.sh)
+- **Teste de Falha de Container:** [`scripts/demo_falha_container.sh`](../scripts/demo_falha_container.sh)
 - **Relatório em Formato LaTeX:** [`docs/main.tex`](main.tex)
-
