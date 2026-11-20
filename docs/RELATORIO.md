@@ -50,8 +50,8 @@ flowchart LR
     end
 
     User -->|"HTTP Requisição :80"| Nginx
-    Nginx -->|"least_conn :5000"| API1
-    Nginx -->|"least_conn :5000"| API2
+    Nginx -->|"ip_hash :5000"| API1
+    Nginx -->|"ip_hash :5000"| API2
     API1 -->|"TCP / SQL :5432"| DB
     API2 -->|"TCP / SQL :5432"| DB
     DB -.->|"Montagem Persistente"| Volume
@@ -80,7 +80,7 @@ flowchart LR
 ### 3.1. Nginx (Proxy Reverso e Balanceador de Carga)
 O serviço `proxy_nginx` emprega a imagem leve `nginx:alpine` e desempenha o papel de intermediário inteligente de borda:
 - **Proteção e Encapsulamento de Rede:** É o único componente que expõe porta para o sistema operacional hospedeiro. Clientes externos ignoram a topologia interna, quantidade de instâncias ou credenciais de banco.
-- **Algoritmo *Least Connections* (`least_conn`):** O Nginx avalia dinamicamente o número de conexões ativas que cada réplica de backend (`api1:5000` e `api2:5000`) possui no momento da chegada da requisição, roteando para a que estiver menos sobrecarregada. Esse escalonamento é ideal para sistemas com I/O de banco de dados, onde requisições com locks transacionais demandam tempos variáveis.
+- **Algoritmos de escalonamento:** A configuração atual emprega **`ip_hash`** (Seção 4.3.1), que calcula um hash do endereço IP do cliente e fixa cada origem em uma réplica específica (*session affinity*). Anteriormente, o ambiente operou com ***Least Connections* (`least_conn`)**, que avalia dinamicamente o número de conexões ativas que cada réplica (`api1:5000` e `api2:5000`) possui no momento da chegada da requisição, roteando para a que estiver menos sobrecarregada — escalonamento adequado a sistemas com I/O de banco de dados e tempos transacionais variáveis. Ambos foram medidos experimentalmente (Seções 4.3 e 4.3.1).
 - **Detecção Passiva de Falhas:** No bloco `upstream`, as réplicas estão configuradas com `max_fails=3` e `fail_timeout=5s`. Se uma instância falhar consecutivamente por 3 vezes, o proxy a remove temporariamente do rodízio por 5 segundos.
 - **Otimizações de SO e Transporte:** Utiliza diretivas de alto desempenho como `sendfile on`, `tcp_nopush on`, `tcp_nodelay on` e conexões persistentes com o backend via `keepalive 32` em `HTTP/1.1`.
 - **Rastreabilidade de Tráfego:** Injeta o cabeçalho `X-Upstream-Backend $upstream_addr`, permitindo que os clientes e ferramentas de auditoria identifiquem qual endereço interno respondeu.
@@ -117,7 +117,7 @@ As instâncias `api_instancia_1` e `api_instancia_2` foram desenvolvidas com Nod
 
 ### 3.7. Ambiente de Execução — Notebook e Configuração do Sistema
 
-As medições da Seção 4 foram realizadas em **19/11/2026**, com o notebook operando no **perfil de desempenho (economia de bateria desativada)**. O ambiente físico e as versões de software utilizados foram:
+As medições da Seção 4 foram realizadas em **19/11/2026** (Round-Robin, `least_conn`, persistência e isolamento) e **20/11/2026** (`ip_hash`), com o notebook operando no **perfil de desempenho (economia de bateria desativada)**. O ambiente físico e as versões de software utilizados foram:
 
 | Item | Configuração observada |
 | :--- | :--- |
@@ -254,10 +254,100 @@ node scripts/test_load_balancer.js 50 10
 #### Análise comparativa
 
 - **Round-Robin (baseline):** mais uma vez foi determinístico — **25 requisições para cada instância nas três execuções**. A primeira medição foi penalizada pelo *cold start* (P95 de 58,3 ms, incluindo o estabelecimento das primeiras conexões e o aquecimento do *pool* do PostgreSQL); já aquecido, ficou entre 6,19 ms e 6,40 ms de latência média e P95 de 14,7 ms a 17,4 ms.
-- **`least_conn` (configuração final):** a distribuição foi adaptativa (54/46, 54/46 e 56/44), sem desequilíbrio relevante, e apresentou **menor latência média nas três repetições** (4,45 ms, 5,21 ms e 5,40 ms) e maior vazão (1609,9 a 1896,0 req/s).
-- **Conclusão:** neste experimento — realizado no notebook descrito na §3.7 — o `least_conn` saiu numericamente à frente em todas as repetições (médias de 5,02 ms contra 9,30 ms; P95 de 13,27 ms contra 30,13 ms; vazão de 1706,6 contra 1097,7 req/s). Parte dessa diferença é atribuível ao fato de o baseline ter sido medido **primeiro**, absorvendo o *cold start*; mesmo comparando apenas as execuções aquecidas a vantagem se mantém, porém menor (≈5,3 ms contra ≈6,3 ms), e as faixas de P95 se sobrepõem parcialmente (14,7–17,4 ms contra 10,1–15,8 ms). Portanto, **não se afirma superioridade rigorosa**: o resultado é uma tendência favorável, coerente com o domínio do problema. Com requisições de custo desigual (por exemplo, `POST /votar` com contenção de gravação ou `GET /apuracao` mais demorada), o `least_conn` desvia o fluxo da réplica com mais conexões ativas, enquanto o Round-Robin enviaria a próxima requisição apenas por ordem cíclica. O `least_conn` segue como configuração final e o Round-Robin documentado como baseline, atendendo ao pedido do roteiro.
+- **`least_conn` (configuração daquele experimento):** a distribuição foi adaptativa (54/46, 54/46 e 56/44), sem desequilíbrio relevante, e apresentou **menor latência média nas três repetições** (4,45 ms, 5,21 ms e 5,40 ms) e maior vazão (1609,9 a 1896,0 req/s).
+- **Conclusão:** neste experimento — realizado no notebook descrito na §3.7 — o `least_conn` saiu numericamente à frente em todas as repetições (médias de 5,02 ms contra 9,30 ms; P95 de 13,27 ms contra 30,13 ms; vazão de 1706,6 contra 1097,7 req/s). Parte dessa diferença é atribuível ao fato de o baseline ter sido medido **primeiro**, absorvendo o *cold start*; mesmo comparando apenas as execuções aquecidas a vantagem se mantém, porém menor (≈5,3 ms contra ≈6,3 ms), e as faixas de P95 se sobrepõem parcialmente (14,7–17,4 ms contra 10,1–15,8 ms). Portanto, **não se afirma superioridade rigorosa**: o resultado é uma tendência favorável, coerente com o domínio do problema. Com requisições de custo desigual (por exemplo, `POST /votar` com contenção de gravação ou `GET /apuracao` mais demorada), o `least_conn` desvia o fluxo da réplica com mais conexões ativas, enquanto o Round-Robin enviaria a próxima requisição apenas por ordem cíclica. Naquele experimento o `least_conn` seguiu como configuração final, tendo sido posteriormente sucedido pelo `ip_hash` (Seção 4.3.1); o Round-Robin permanece documentado como baseline, atendendo ao pedido do roteiro.
 
 > **Nota metodológica:** os números acima são de execuções curtas no mesmo host e servem como evidência de funcionamento e tendência, não como benchmark rigoroso. O script `test_load_balancer.js` mede a latência ponta a ponta no cliente, incluindo o tempo de conexão/keepalive do Nginx. A ordem de execução (Round-Robin primeiro, `least_conn` depois) é um viés conhecido deste experimento.
+
+#### 4.3.1. Avaliação Experimental: IP Hash (afinidade por cliente)
+
+Como complemento à comparação anterior, a diretiva `least_conn;` foi substituída por `ip_hash;` no bloco `upstream` (ver `scripts/trocar_algoritmo.sh`). O `ip_hash` calcula um hash do endereço IP de origem (os três primeiros octetos, para IPv4) e encaminha a requisição sempre para a mesma réplica — mecanismo de *afinidade de sessão* (*session affinity*). A configuração efetiva foi conferida dentro do contêiner antes da coleta:
+
+```bash
+docker exec proxy_nginx nginx -T | grep -A6 'upstream simulador_votacao'
+# upstream simulador_votacao {
+#     ip_hash;
+#     server api1:5000 max_fails=3 fail_timeout=5s;
+#     server api2:5000 max_fails=3 fail_timeout=5s;
+#     keepalive 32;
+# }
+```
+
+> **Nota de aplicação da configuração:** o script `trocar_algoritmo.sh` edita o arquivo com `sed -i`, que substitui o inode do arquivo. Como `nginx.conf` é injetado por *bind mount* (`./nginx/nginx.conf:/etc/nginx/nginx.conf:ro`), o contêiner continuou enxergando a versão antiga mesmo após `nginx -s reload`. Foi necessário recriar apenas o proxy (`docker compose up -d --force-recreate nginx`) para que o montante passasse a apontar para o arquivo com `ip_hash`. A checagem com `nginx -T` acima foi feita **depois** dessa recriação.
+
+Executando novamente o teste de 10 requisições sequenciais em 20/11/2026:
+
+```bash
+node scripts/test_load_balancer.js 10
+```
+
+#### Evidência de Execução (Log Obtido em 20/11/2026):
+```text
+==============================================================================
+🚀 SIMULADOR DE CARGA E BENCHMARK DE LATÊNCIA — NGINX
+• URL Alvo:         http://localhost:80/
+• Total de Carga:   10 requisições
+• Concorrência:     1 simultânea(s)
+==============================================================================
+[Req #001] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   6.80 ms
+[Req #002] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   1.97 ms
+[Req #003] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   0.93 ms
+[Req #004] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   3.79 ms
+[Req #005] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   1.12 ms
+[Req #006] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   1.25 ms
+[Req #007] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   0.78 ms
+[Req #008] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   1.08 ms
+[Req #009] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   1.36 ms
+[Req #010] Status: 200 | Respondido por: Instancia-2  | Container: 5eaf4bfa | Latência:   1.33 ms
+
+==============================================================================
+📊 RESUMO DO BALANCEAMENTO E PERFORMANCE
+==============================================================================
+• Tempo total do teste:    0.02 segundos
+• Vazão (Throughput):      452.0 requisições/segundo
+• Requisições com sucesso: 10 de 10
+
+⚖️  DISTRIBUIÇÃO DE CARGA ENTRE AS INSTÂNCIAS:
+  * Instancia-2   :  10 reqs (100.0%) | Latência Média: 2.04 ms (Min: 0.78 ms / Max: 6.80 ms)
+
+⏱️  MÉTRICAS GERAIS DE LATÊNCIA (Resposta do Nginx):
+  * Mínima:  0.78 ms
+  * Média:   2.04 ms
+  * P50 (Mediana): 1.33 ms
+  * P95:     6.80 ms
+  * Máxima:  6.80 ms
+==============================================================================
+```
+
+> **Comprovação:** diferente do experimento com `least_conn`, não houve alternância: as **10 requisições foram integralmente atendidas pela `Instancia-2`** (`5eaf4bfa`, endereço interno `172.18.0.3:5000`, confirmado pelo cabeçalho `X-Upstream-Backend`). Isso é exatamente o comportamento esperado do `ip_hash`: como todo o tráfego de teste parte de um único cliente (`localhost`), o hash do IP sempre seleciona a mesma réplica. A afinidade não é um desequilíbrio acidental nem uma falha do balanceador.
+
+Para manter o mesmo protocolo do experimento anterior, foram feitas **3 repetições** de 50 requisições GET com concorrência 10:
+
+```bash
+node scripts/test_load_balancer.js 50 10
+```
+
+| Algoritmo | Execução | Distribuição (I1 / I2) | Latência média | P95 | Vazão |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `ip_hash` | 1 | 0 / 50 (0% / 100%) | 5,79 ms | 14,7 ms | 1340,5 req/s |
+| `ip_hash` | 2 | 0 / 50 (0% / 100%) | 6,42 ms | 28,7 ms | 1358,5 req/s |
+| `ip_hash` | 3 | 0 / 50 (0% / 100%) | 4,79 ms | 12,4 ms | 1734,2 req/s |
+| **Média `ip_hash`** | — | **0% / 100%** | **5,67 ms** | **18,60 ms** | **1477,7 req/s** |
+
+**Teste de failover da réplica fixa.** Para verificar se a afinidade não compromete a disponibilidade, a instância selecionada pelo hash (`api_instancia_2`) foi parada e o proxy foi consultado três vezes:
+
+```bash
+docker stop api_instancia_2
+curl -s http://localhost/   # ×3 → "instancia":"Instancia-1"
+docker start api_instancia_2
+# após ~6 s (fail_timeout): "instancia":"Instancia-2"
+```
+
+As três requisições durante a falha foram atendidas pela `Instancia-1`, e cerca de 6 segundos após a recuperação o tráfego retornou à `Instancia-2`. Portanto, os parâmetros `max_fails=3` / `fail_timeout=5s` continuam protegendo a disponibilidade mesmo com afinidade por IP.
+
+**Análise:** o `ip_hash` troca a distribuição uniforme por previsibilidade de origem. Com um único IP de teste toda a carga concentra-se em uma réplica (100% na `Instancia-2`); em produção, com muitos IPs distintos, o hash tende a distribuir os clientes entre as duas réplicas, mas sem o ajuste dinâmico do `least_conn`. Como as APIs são *stateless* e compartilham o mesmo PostgreSQL, a afinidade não traz ganho funcional neste projeto e pode concentrar carga; ela seria vantajosa apenas se houvesse estado local de sessão. A latência média (5,67 ms) ficou próxima da tendência medida para o `least_conn` (5,02 ms), e a vazão média (1477,7 req/s) situou-se entre o baseline e o `least_conn`, com P95 mais instável (18,60 ms, influenciado por picos de 28,7 ms e 32,8 ms). O `ip_hash` passa a ser a configuração final; Round-Robin e `least_conn` permanecem documentados como alternativas avaliadas.
+
+> **Nota metodológica:** os números acima são de execuções curtas no mesmo host (20/11/2026) e servem como evidência de funcionamento, não como benchmark rigoroso. A concentração em uma única instância é consequência direta de todo o tráfego de teste originar-se de `localhost`.
 
 ---
 
@@ -392,7 +482,51 @@ while true; do clear; docker exec db_postgres psql -U postgres -d votacao -c "SE
 
 O teste é aprovado quando a soma dos contadores e o número de registros em `votos` coincidem com o valor esperado (`OK` ao final).
 
-<!-- TODO: colar aqui a saída real da execução (e prints dos terminais de acompanhamento) como evidência. -->
+#### Resultados após executar `scripts/demo_falha_container.sh`:
+
+```text
+=== 1. Estado inicial dos 4 containers ===
+  proxy_nginx        running
+  api_instancia_1    running
+  api_instancia_2    running
+  db_postgres        running
+
+=== 2. Contagem de votos ANTES da falha ===
+  Soma dos contadores : 2572
+  Registros em 'votos': 2572
+
+=== 3. FALHA: docker stop api_instancia_1 ===
+  api_instancia_1 parado.
+  proxy_nginx        running
+  api_instancia_1    exited
+  api_instancia_2    running
+  db_postgres        running
+
+=== 4. Enviando 20 votos pelo Nginx com api_instancia_1 fora do ar ===
+  Votos confirmados (HTTP 200): 20
+  Votos recusados/erro        : 0
+  Atendidos por Instancia-2: 20
+
+=== 5. Os demais containers continuam rodando? ===
+  proxy_nginx        running
+  api_instancia_1    exited
+  api_instancia_2    running
+  db_postgres        running
+
+=== 6. RECUPERAÇÃO: docker start api_instancia_1 ===
+  api_instancia_1 iniciado.
+  proxy_nginx        running
+  api_instancia_1    running
+  api_instancia_2    running
+  db_postgres        running
+
+=== 7. Contagem de votos DEPOIS ===
+  Soma dos contadores : 2592 (esperado: 2592)
+  Registros em 'votos': 2592 (esperado: 2592)
+
+=== RESULTADO ===
+  OK: nenhum voto confirmado foi perdido
+```
 
 ### 4.6. Teste de Isolamento de Rede
 
@@ -421,7 +555,7 @@ curl -o /dev/null -w 'HTTP %{http_code}\n' http://localhost/
 A execução prática da infraestrutura até esta fase evidenciou de forma tangível os conceitos fundamentais abordados na disciplina de **Sistemas Operacionais Modernos**:
 
 - **Eficiência e Densidade de Recursos:** O uso de contêineres Docker demonstrou a superioridade da virtualização baseada em *namespaces* e *cgroups* em relação a máquinas virtuais legadas, viabilizando a instanciação instantânea de quatro serviços interdependentes com consumo mínimo de memória RAM.
-- **Escalonamento em Nível de Transporte:** A validação realizada no notebook Acer Nitro ANV15-51 (§3.7) confirmou a distribuição 50/50 do *Round-Robin* e a distribuição adaptativa do *Least Connections* (54/46 a 56/44). Neste experimento o `least_conn` apresentou menor latência média (5,02 ms contra 9,30 ms) e maior vazão (1706,6 contra 1097,7 req/s), ainda que parte da diferença venha do *cold start* do baseline e as faixas de P95 se sobreponham parcialmente (ver §4.3). O `least_conn` permanece como configuração final por responder ao número de conexões ativas, sendo mais adequado a futuras cargas com custo heterogêneo, sem que se afirme superioridade rigorosa.
+- **Escalonamento em Nível de Transporte:** A validação realizada no notebook Acer Nitro ANV15-51 (§3.7) confirmou a distribuição 50/50 do *Round-Robin* e a distribuição adaptativa do *Least Connections* (54/46 a 56/44). Neste experimento o `least_conn` apresentou menor latência média (5,02 ms contra 9,30 ms) e maior vazão (1706,6 contra 1097,7 req/s), ainda que parte da diferença venha do *cold start* do baseline e as faixas de P95 se sobreponham parcialmente (ver §4.3). Em 20/11/2026 a configuração foi migrada para `ip_hash` e validada (§4.3.1): as 50 requisições de cada repetição foram integralmente atendidas pela `Instancia-2` (100%), comportamento esperado de afinidade quando todo o tráfego parte de um único IP. O teste de falha confirmou que, ao parar a réplica fixa, o Nginx redireciona o tráfego para a sobrevivente e retoma a afinidade após a recuperação. O `ip_hash` é a configuração final; `least_conn` e Round-Robin permanecem documentados como alternativas avaliadas, sem afirmação de superioridade rigorosa.
 - **Contexto de Execução:** As medições foram obtidas com Docker Engine 29.9.3 / Compose v5.7.0 rodando de forma nativa sobre Linux Mint 22.3 (kernel 6.17), cgroup v2 e 12 CPUs lógicas, sem a camada de virtualização de um Docker Desktop — informação relevante para interpretar os números de vazão e latência.
 - **Resiliência e Desacoplamento:** O padrão de nós *stateless* aliado ao isolamento de armazenamento em Docker Volumes assegurou que panes de processo ou reinicializações de contêineres não causem corrupção nem perda do estado do sistema.
 

@@ -121,14 +121,16 @@ docker exec -it db_postgres psql -U postgres -d votacao -c "SELECT * FROM candid
 
 ### 3. Alternar Algoritmo de Balanceamento (Nginx)
 
-O Nginx está configurado por padrão com **Least Connections** (`least_conn`).
+O Nginx está configurado por padrão com **Least Connections** (`least_conn`), que envia cada requisição para a réplica com menos conexões ativas. Esse é o algoritmo usado na demonstração ao vivo porque o roteiro da prática exige que o navegador alterne entre as duas aplicações. O **IP Hash** (`ip_hash`) foi avaliado apenas como extra: ele fixa cada IP de cliente em uma réplica (afinidade) e, por isso, não alterna quando o teste é feito por um único cliente. Os resultados dos três algoritmos estão na Seção 4.3 de [`docs/RELATORIO.md`](docs/RELATORIO.md), com o `ip_hash` detalhado na Seção 4.3.1.
 
-Caso queira avaliar a diferença em relação ao **Round-Robin** (baseline do roteiro):
+Caso queira avaliar o **Round-Robin** (baseline do roteiro) ou o **IP Hash** (extra):
 1. Abra o arquivo `nginx/nginx.conf`.
-2. Comente ou descomente a linha `least_conn;`:
+2. Comente ou descomente a linha desejada dentro do bloco `upstream`:
    ```nginx
    upstream simulador_votacao {
-       # least_conn;  # Comentado = Round-Robin padrão
+       least_conn;       # Padrão ativo: alterna entre as réplicas
+       # ip_hash;        # Extra: fixa o cliente em uma réplica
+       # (sem nenhuma diretiva = Round-Robin, baseline do roteiro)
        server api1:5000 max_fails=3 fail_timeout=5s;
        server api2:5000 max_fails=3 fail_timeout=5s;
    }
@@ -148,6 +150,8 @@ bash scripts/trocar_algoritmo.sh least_conn   # Least Connections
 bash scripts/trocar_algoritmo.sh ip_hash      # IP Hash
 bash scripts/trocar_algoritmo.sh              # sem argumento: mostra um menu
 ```
+
+> **Atenção:** o script usa `sed -i`, que substitui o inode de `nginx.conf`. Como o arquivo entra no container por *bind mount*, o `nginx -s reload` pode continuar lendo a configuração antiga. Após trocar o algoritmo, confirme com `docker exec proxy_nginx nginx -T | grep -A3 upstream` e, se necessário, recrie apenas o proxy com `docker compose up -d --force-recreate nginx`.
 
 ---
 
