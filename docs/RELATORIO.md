@@ -101,6 +101,10 @@ O serviço `proxy_nginx` emprega a imagem leve `nginx:alpine` e desempenha o pap
 ### 3.4. Docker Volume (Persistência e Isolamento de Estado)
 - **Desacoplamento do Ciclo de Vida do Contêiner:** A área física de escrita do PostgreSQL reside no volume gerenciado `pgdata`, mapeado em `/var/lib/postgresql/data`. Se o contêiner do SGBD for parado de forma controlada (`docker stop`), excluído (`docker rm`), recriado ou morto abruptamente (`docker kill`), os dados das tabelas permanecem intactos. O teste executado neste trabalho usou `docker stop`, que envia `SIGTERM` e permite desligamento limpo; portanto ele valida persistência, não simula um crash do SGBD.
 - **Desempenho Direto de I/O:** Os dados no volume contornam os drivers em camadas do Docker (tradicionalmente *overlay2*; neste host, com Docker 29 e containerd, `docker info` reporta `overlayfs`, conforme a Seção 3.7), obtendo taxa de transferência próxima à velocidade de disco do SO hospedeiro.
+- **Declaração no `docker-compose.yml`:** o serviço `db` monta `pgdata:/var/lib/postgresql/data`, e o volume é declarado no bloco `volumes:` com `driver: local` e `name: pgdata`. O nome fixo evita que o Compose prefixe o volume com o nome da pasta do projeto, o que o tornaria "órfão" se o projeto fosse executado a partir de outro diretório.
+- **Volume nomeado (*named volume*) em vez de *bind mount*:** o caminho físico é gerenciado pelo Docker (em `/var/lib/docker/volumes/pgdata/_data`), não depende da estrutura de pastas nem das permissões do host, é portável entre Linux, Windows e macOS e evita conflitos de propriedade de arquivos com o usuário `postgres` do contêiner. O *bind mount* foi usado apenas para arquivos somente leitura de configuração (`init.sql` e `nginx.conf`, com `:ro`).
+- **Ciclo de vida do volume:** `docker compose down` remove contêineres e rede, mas **preserva** o volume; somente `docker compose down -v` (ou `docker volume rm pgdata`) apaga os dados. O volume pode ser inspecionado com `docker volume ls` e `docker volume inspect pgdata`.
+- **Relação com o `init.sql`:** o PostgreSQL só executa os scripts de `/docker-entrypoint-initdb.d/` quando o diretório de dados está **vazio**, isto é, na primeira subida com um volume novo. Reiniciar ou recriar o contêiner com o volume já populado **não** reexecuta o script nem sobrescreve os votos. Para recriar o banco do zero é preciso remover o volume (`down -v`).
 
 ### 3.5. Node.js e Express (Microsserviços de Backend)
 As instâncias `api_instancia_1` e `api_instancia_2` foram desenvolvidas com Node.js 20 e Express:
@@ -118,6 +122,79 @@ As instâncias `api_instancia_1` e `api_instancia_2` foram desenvolvidas com Nod
 - **Contenção na Atualização do Contador:** A rota `POST /votar` executa um CTE com `UPDATE candidatos SET total_votos = total_votos + 1` na linha do candidato. Esse incremento na mesma tupla serializa as escritas concorrentes direcionadas ao mesmo candidato: o isolamento ACID evita perdas, mas constitui o gargalo esperado sob carga de escrita. Essa contenção **não foi medida** nos benchmarks da Seção 4.3, que usam apenas `GET /`.
 - **Script de Inicialização Automática (`database/init.sql`):** Montado em `/docker-entrypoint-initdb.d/init.sql:ro`, o script é acionado na primeira inicialização do banco para criar as tabelas `candidatos` e `votos`, além de popular os registros iniciais (Candidato A: 10, Candidato B: 20 e Voto Nulo: 99).
 - **Atomicidade via SQL CTE:** O registro do voto e a contabilização na tabela de candidatos são processados em um único *round-trip* via `WITH updated AS (...) INSERT INTO votos ...`, eliminando *race conditions*.
+
+#### 3.6.1. Configuração do Contêiner do SGBD
+
+O serviço `db` (contêiner `db_postgres`) é definido no `docker-compose.yml` com os parâmetros abaixo:
+
+| Parâmetro | Valor | Finalidade |
+| :--- | :--- | :--- |
+| `image` | `postgres:15-alpine` | Imagem oficial do PostgreSQL 15 em base Alpine (leve) |
+| `container_name` | `db_postgres` | Nome fixo, usado nos comandos `docker exec` e nos scripts de teste |
+| `POSTGRES_DB` | `votacao` | Banco criado automaticamente na primeira inicialização |
+| `POSTGRES_USER` | `postgres` | Superusuário do banco |
+| `POSTGRES_PASSWORD` | `postgres` | Senha do superusuário (ambiente acadêmico; ver §3.6.3) |
+| `volumes` | `pgdata:/var/lib/postgresql/data` | Persistência dos dados (Docker Volume, §3.4) |
+| `volumes` | `./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro` | Criação do schema e carga inicial (somente leitura) |
+| `networks` | `rede_votacao` (*bridge*) | Rede privada compartilhada com as APIs |
+| `ports` | *(nenhuma publicada)* | A porta `5432` existe apenas dentro da rede interna |
+| `restart` | `always` | Reinício automático em caso de falha |
+
+As APIs localizam o banco pelo nome do serviço (`DB_HOST=db`, `DB_PORT=5432`), resolvido pelo DNS embutido do Docker, e usam as mesmas credenciais por variáveis de ambiente.
+
+#### 3.6.2. Schema da Tabela de Votos (`database/init.sql`)
+
+O schema é composto por duas tabelas relacionadas:
+
+| Tabela | Coluna | Tipo | Restrições | Função |
+| :--- | :--- | :--- | :--- | :--- |
+| `candidatos` | `id` | `SERIAL` | PK | Identificador interno |
+| | `numero` | `INT` | `UNIQUE`, `NOT NULL` | Número do candidato na votação (10, 20, 99) |
+| | `nome` | `VARCHAR(100)` | `NOT NULL` | Nome do candidato |
+| | `partido` | `VARCHAR(50)` | `NOT NULL` | Partido |
+| | `total_votos` | `INT` | `DEFAULT 0` | Contador acumulado, usado para a apuração rápida |
+| `votos` | `id` | `SERIAL` | PK | Identificador do voto |
+| | `candidato_id` | `INT` | FK → `candidatos(id)` | Candidato escolhido |
+| | `instancia_origem` | `VARCHAR(50)` | `NOT NULL` | Instância da API que processou o voto (rastreabilidade do balanceamento) |
+| | `criado_em` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Momento do registro |
+
+```mermaid
+erDiagram
+    CANDIDATOS ||--o{ VOTOS : recebe
+    CANDIDATOS {
+        int id PK
+        int numero UK
+        varchar nome
+        varchar partido
+        int total_votos
+    }
+    VOTOS {
+        int id PK
+        int candidato_id FK
+        varchar instancia_origem
+        timestamp criado_em
+    }
+```
+
+*Figura — Diagrama entidade-relacionamento do banco `votacao`.*
+
+**Decisões de projeto:**
+- **Tabela de auditoria + contador:** cada voto gera uma linha em `votos` (histórico, horário e instância de origem) e incrementa `candidatos.total_votos` (leitura rápida em `GET /apuracao`, sem `COUNT(*)` sobre todos os votos).
+- **Consistência entre as duas tabelas:** o INSERT e o UPDATE ocorrem na mesma instrução (CTE), em uma única transação (o custo dessa garantia é a contenção do `UPDATE` na linha do candidato, descrita no início da §3.6). Assim, a soma de `total_votos` deve ser sempre igual ao número de linhas de `votos`. A verificação manual é:
+  ```sql
+  SELECT (SELECT SUM(total_votos) FROM candidatos) AS soma_contadores,
+         (SELECT COUNT(*) FROM votos)              AS linhas_votos;
+  ```
+- **Candidato 99 (Voto Nulo / Branco):** tratado como um candidato especial, o que simplifica a apuração e o cálculo percentual.
+- **Idempotência do script:** `CREATE TABLE IF NOT EXISTS` e `INSERT ... ON CONFLICT (numero) DO NOTHING` impedem erros ou duplicações caso o script seja executado novamente.
+
+#### 3.6.3. Limitações Conhecidas e Melhorias Possíveis
+
+- **Credenciais em texto puro:** usuário e senha (`postgres`/`postgres`) estão no `docker-compose.yml`, aceitável em ambiente acadêmico. Em produção, o ideal é usar arquivo `.env` fora do versionamento ou *Docker secrets*, além de um usuário de aplicação com privilégios mínimos.
+- **Ausência de `healthcheck` no contêiner do banco:** sem ele, o `depends_on` das APIs só garante que o contêiner foi iniciado, não que o PostgreSQL já aceita conexões. Um `healthcheck` com `pg_isready` resolveria isso.
+- **`candidato_id` aceita `NULL`:** a coluna não possui `NOT NULL`; a aplicação sempre informa o candidato, mas a restrição no banco reforçaria a integridade.
+
+---
 
 ### 3.7. Ambiente de Execução — Notebook e Configuração do Sistema
 
