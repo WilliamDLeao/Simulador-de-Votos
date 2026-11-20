@@ -138,6 +138,81 @@ Caso queira avaliar a diferença em relação ao **Round-Robin** (baseline do ro
    docker exec proxy_nginx nginx -s reload
    ```
 
+#### Alternativa: trocar o algoritmo pelo script
+
+Em vez de editar o arquivo na mão, use `scripts/trocar_algoritmo.sh`. Ele remove o algoritmo atual do bloco `upstream`, insere o escolhido, valida com `nginx -t` e recarrega o Nginx sem reiniciar o container.
+
+```bash
+bash scripts/trocar_algoritmo.sh rr           # Round-Robin (baseline)
+bash scripts/trocar_algoritmo.sh least_conn   # Least Connections
+bash scripts/trocar_algoritmo.sh ip_hash      # IP Hash
+bash scripts/trocar_algoritmo.sh              # sem argumento: mostra um menu
+```
+
+---
+
+### 4. Testar a Falha de um Container (script `demo_falha_container.sh`)
+
+Derruba **um** dos 4 containers (`proxy_nginx`, `api_instancia_1`, `api_instancia_2` ou `db_postgres`) com `docker stop`, envia votos pelo Nginx durante a falha, reinicia o container e prova duas coisas: os demais containers continuam rodando e nenhum voto confirmado é perdido.
+
+**Pré-requisitos:** stack no ar (`docker compose up --build -d`), `docker` e `curl` disponíveis e execução a partir da raiz do projeto. No Windows, use o Git Bash.
+
+```bash
+bash scripts/demo_falha_container.sh                      # padrão: api_instancia_1, 20 votos
+bash scripts/demo_falha_container.sh api_instancia_2 50   # alvo e nº de votos
+bash scripts/demo_falha_container.sh db_postgres 20
+bash scripts/demo_falha_container.sh proxy_nginx
+```
+
+Parâmetros posicionais: `[container] [votos]`. O script não precisa de configuração adicional (URL `http://localhost` e nomes dos containers estão no topo do arquivo).
+
+**Etapas executadas:**
+1. Mostra o estado dos 4 containers.
+2. Registra a contagem de votos antes (soma de `candidatos.total_votos` e nº de linhas em `votos`).
+3. `docker stop` no container escolhido.
+4. Envia os votos via `POST /votar` pelo Nginx e conta quantos retornaram HTTP 200 e qual instância atendeu.
+5. Mostra que os demais containers seguem em execução.
+6. `docker start` no container (se for o banco, espera o `pg_isready`).
+7. Compara a contagem final com a esperada (antes + votos confirmados) e imprime `OK` ou `ATENÇÃO`.
+
+**Comportamento esperado por alvo:**
+
+| Alvo | Durante a falha | Resultado esperado |
+| :--- | :--- | :--- |
+| `api_instancia_1` / `api_instancia_2` | Nginx envia tudo à instância saudável | Todos os votos confirmados, nenhum perdido |
+| `db_postgres` | API responde 503 (banco indisponível) | Votos recusados não contam; os dados anteriores permanecem (Docker Volume) |
+| `proxy_nginx` | Porta 80 sem resposta | Nenhum voto confirmado; dados intactos no banco |
+
+---
+
+### 5. Acompanhar em Tempo Real
+
+Abra dois terminais antes de rodar o script de falha. No Git Bash o comando `watch` não existe; use um laço `while` (Ctrl+C para parar).
+
+```bash
+# Terminal 1: estado dos containers
+while true; do clear; docker ps -a --format "table {{.Names}}\t{{.Status}}"; sleep 1; done
+
+# Terminal 2: votos no banco
+while true; do clear; docker exec db_postgres psql -U postgres -d votacao -c "SELECT numero, nome, total_votos FROM candidatos ORDER BY numero;"; sleep 1; done
+```
+
+Se o `docker exec` falhar no Git Bash por conversão de caminhos, prefixe com `MSYS_NO_PATHCONV=1`. Também é possível acompanhar a apuração em `http://localhost/apuracao` e os containers na aba *Containers* do Docker Desktop. Opcional: `docker compose logs -f api1 api2` mostra qual instância atende cada voto.
+
+---
+
+### 6. Problemas Comuns
+
+**`Conflict. The container name "/db_postgres" is already in use`:** existe uma stack antiga criada a partir de outra pasta (outro nome de projeto Compose). Derrube-a **sem** `-v`, para não apagar o volume `pgdata`, e suba de novo:
+
+```bash
+docker ps -a --format "table {{.Names}}\t{{.Status}}"
+docker compose -p simulador-de-votos-main down    # ajuste o nome do projeto antigo, se for outro
+docker compose up --build -d
+```
+
+**`$'\r': command not found` ao rodar um `.sh`:** o arquivo veio com quebras de linha do Windows. Corrija com `sed -i 's/\r$//' scripts/<arquivo>.sh`.
+
 ---
 
 ## 🛑 Como Parar os Serviços
@@ -151,4 +226,3 @@ Para parar os contêineres e **apagar todos os dados/volumes** (limpeza completa
 ```bash
 docker compose down -v
 ```
-
