@@ -26,6 +26,7 @@ Simulador-de-Votos/
 │   └── ...
 └── docs/                      # [Squad 4] Relatório técnico em LaTeX
     └── main.tex
+    └── relatorio-seminario-so.pdf      # Relatório Final - PDF
 ```
 
 ---
