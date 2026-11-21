@@ -8,6 +8,9 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
 \usepackage{tikz}
 \usepackage{amsmath}
 \usetikzlibrary{shapes,arrows.meta,positioning,fit,backgrounds,calc}
@@ -57,7 +60,7 @@
 
 % TODO: substituir "Equipe de Desenvolvimento" pelos nomes dos integrantes antes da entrega.
 \author{
-    Equipe de Desenvolvimento \\
+    Arthur Batista \and Danniel Holanda \and Igor Peixoto \and João Paulo \and Otávio Hiratsuka \and Pedro Galvão \and Rafael Ferreira \and William Leão \\
     \textit{CEFET-MG --- Departamento de Computação (DECOM)} \\
     Prof. Michel Pires da Silva
 }
@@ -69,7 +72,7 @@
 \maketitle
 
 \begin{abstract}
-Este relatório documenta a concepção, a implementação e a validação experimental de uma infraestrutura distribuída para um sistema de votação eletrônica de alta disponibilidade, desenvolvida em conformidade com as diretrizes da \textbf{Prática 1: Infraestrutura Web e Balanceamento de Carga} da disciplina de Sistemas Operacionais Modernos. A arquitetura implementada organiza quatro contêineres interdependentes orquestrados via Docker Compose: um Proxy Reverso e balanceador de carga Nginx configurado com \textit{Least Connections} (\texttt{least\_conn}) como escalonamento final (\textit{Round-Robin} como \textit{baseline} e \textit{IP Hash} avaliados para comparação), duas instâncias homogêneas e sem estado (\textit{stateless}) da API de votação desenvolvidas em Node.js/Express, e um Sistema Gerenciador de Banco de Dados relacional PostgreSQL 15 munido de persistência durável via Docker Volume nomeado e isolamento estrito de portas através de uma Docker Network em modo \textit{bridge}. Este documento registra minuciosamente o que foi efetivamente implementado até o momento, descrevendo os componentes, as decisões arquiteturais de sistemas operacionais, as evidências de alternância de nós e os procedimentos de validação de persistência e tolerância a falhas.
+Este relatório documenta a concepção, a implementação e a validação experimental de uma infraestrutura distribuída para um sistema de votação eletrônica de alta disponibilidade, desenvolvida em conformidade com as diretrizes da \textbf{Prática 1: Infraestrutura Web e Balanceamento de Carga} da disciplina de Sistemas Operacionais Modernos. A arquitetura implementada organiza quatro contêineres interdependentes orquestrados via Docker Compose: um Proxy Reverso e balanceador de carga Nginx configurado com \textit{Least Connections} (\texttt{least\_conn}) como escalonamento final (\textit{Round-Robin} como \textit{baseline} e \textit{IP Hash} avaliados para comparação), duas instâncias homogêneas e sem estado (\textit{stateless}) da API de votação desenvolvidas em Node.js/Express, e um Sistema Gerenciador de Banco de Dados relacional PostgreSQL 15 munido de persistência durável via Docker Volume nomeado e isolamento estrito de portas através de uma Docker Network em modo \textit{bridge}. Este documento registra o que foi implementado , descrevendo os componentes, as decisões arquiteturais de sistemas operacionais, as evidências de alternância de nós e os procedimentos de validação de persistência e tolerância a falhas.
 \end{abstract}
 
 \tableofcontents
@@ -87,7 +90,7 @@ A implementação atual atende integralmente aos requisitos estipulados para a P
     \item \textbf{Orquestração Unificada:} Um manifesto \texttt{docker-compose.yml} parametrizado que provisiona quatro contêineres de maneira coordenada e reprodutível.
     \item \textbf{Proxy Reverso de Borda:} Servidor Nginx atuando como único ponto de ingresso externo (porta 80), ocultando os nós internos.
     \item \textbf{Balanceamento de Carga:} Distribuição dinâmica de requisições HTTP entre duas réplicas idênticas da API Node.js, com identificação rastreável do nó executor por meio do \textit{hostname} do contêiner e nome de instância.
-    \item \textbf{Persistência e Isolamento de Armazenamento:} Banco de dados relacional PostgreSQL 15 configurado com Docker Volume independente para garantir a durabilidade dos dados eleitorais contra encerramentos forçados ou recriação de contêineres.
+    \item \textbf{Persistência e Isolamento de Armazenamento:} Banco de dados relacional PostgreSQL 15 configurado com Docker Volume independente para garantir a durabilidade dos dados eleitorais contra a parada ou recriação de contêineres.
     \item \textbf{Segurança e Isolamento de Rede:} Rede virtual privada em modo \textit{bridge} (\texttt{rede\_votacao}), na qual os serviços de backend e banco de dados operam de forma isolada, sem portas abertas na interface do hospedeiro (\textit{host}).
 \end{enumerate}
 
@@ -195,7 +198,7 @@ Foi criada a rede virtual privativa \texttt{rede\_votacao} utilizando o driver \
 \subsection{Persistência com Docker Volume}
 A persistência do banco de dados relacional foi implementada com o volume gerenciado \texttt{pgdata}:
 \begin{itemize}
-    \item \textbf{Independência do Ciclo de Vida:} O armazenamento físico dos dados transacionais do banco reside no volume gerenciado no host, desacoplado da camada efêmera de escrita (\textit{Copy-on-Write}) do contêiner do SGBD. Comandos de parada controlada (\texttt{docker stop}), remoção e recriação do contêiner (\texttt{docker rm}) ou até mesmo uma falha abrupta (\texttt{docker kill}) preservam a integridade dos dados e das tabelas intactas. O teste executado neste trabalho usou \texttt{docker stop}, que envia \texttt{SIGTERM} e permite desligamento limpo; portanto ele valida persistência, não simulando um crash do SGBD.
+    \item \textbf{Independência do Ciclo de Vida:} O armazenamento físico dos dados transacionais do banco reside no volume gerenciado no host, desacoplado da camada efêmera de escrita (\textit{Copy-on-Write}) do contêiner do SGBD. Comandos de parada controlada (\texttt{docker stop}) e de remoção e recriação do contêiner (\texttt{docker rm}) preservam os dados e as tabelas. Em uma falha abrupta (\texttt{docker kill}), o PostgreSQL recupera o estado a partir do WAL, mas esse cenário não foi testado neste trabalho. O teste executado usou \texttt{docker stop}, que envia SIGTERM e permite desligamento limpo; portanto ele valida persistência, não um crash do SGBD.
     \item \textbf{Eficiência de E/S:} O volume ignora os drivers de armazenamento em camadas do Docker (tradicionalmente \textit{overlay2}; neste host, com Docker~29 e containerd, \texttt{docker info} reporta \texttt{overlayfs}, conforme a Tabela~\ref{tab:ambiente}), comunicando-se diretamente com o subsistema de arquivos do sistema hospedeiro.
 \end{itemize}
 
@@ -260,8 +263,10 @@ O serviço \texttt{db} (contêiner \texttt{db\_postgres}) é declarado no \textt
 \texttt{POSTGRES\_DB} & \texttt{votacao} & Banco criado na primeira inicialização \\
 \texttt{POSTGRES\_USER} & \texttt{postgres} & Superusuário do banco \\
 \texttt{POSTGRES\_PASSWORD} & \texttt{postgres} & Senha do superusuário (ambiente acadêmico) \\
-\texttt{volumes} (dados) & \texttt{pgdata:/var/lib/postgresql/data} & Persistência física via Docker Volume \\
-\texttt{volumes} (init) & \texttt{./database/init.sql:...init.sql:ro} & Criação do schema e carga inicial (somente leitura) \\
+\texttt{volumes} (dados) & \texttt{pgdata:
+/var/lib/postgresql/data} & Persistência física via Docker Volume \\
+\texttt{volumes} (init) & \texttt{./database/init.sql
+:...init.sql:ro} & Criação do schema e carga inicial (somente leitura) \\
 \texttt{networks} & \texttt{rede\_votacao} (\textit{bridge}) & Rede privada compartilhada com as APIs \\
 \texttt{ports} & \textit{Nenhuma publicada} & Porta \texttt{5432} restrita à rede interna \\
 \texttt{restart} & \texttt{always} & Reinício automático em caso de falha \\
@@ -275,8 +280,14 @@ O serviço \texttt{db} (contêiner \texttt{db\_postgres}) é declarado no \textt
 O esquema é composto por duas tabelas relacionadas (\texttt{candidatos} e \texttt{votos}), conforme detalhado na Tabela~\ref{tab:schema_db}:
 \begin{table}[h!]
 \centering
-\small
-\begin{tabular}{lllll}
+\footnotesize
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{
+  >{\raggedright\arraybackslash}p{0.13\textwidth}
+  >{\raggedright\arraybackslash}p{0.17\textwidth}
+  >{\raggedright\arraybackslash}p{0.15\textwidth}
+  >{\raggedright\arraybackslash}p{0.22\textwidth}
+  >{\raggedright\arraybackslash}X}
 \toprule
 \textbf{Tabela} & \textbf{Coluna} & \textbf{Tipo} & \textbf{Restrições} & \textbf{Função} \\
 \midrule
@@ -291,7 +302,7 @@ O esquema é composto por duas tabelas relacionadas (\texttt{candidatos} e \text
  & \texttt{instancia\_origem} & \texttt{VARCHAR(50)} & \texttt{NOT NULL} & Réplica da API que processou o voto \\
  & \texttt{criado\_em} & \texttt{TIMESTAMP} & \texttt{DEFAULT CURRENT\_TIMESTAMP} & Carimbo de tempo do registro \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \caption{Esquema das tabelas \texttt{candidatos} e \texttt{votos}.}
 \label{tab:schema_db}
 \end{table}
@@ -320,7 +331,6 @@ As medições da Seção~4 foram realizadas em \textbf{19/11/2026} (Round-Robin,
 \textbf{Item} & \textbf{Configuração observada} \\
 \midrule
 Notebook & Acer \textbf{Nitro ANV15-51} (placa \texttt{Sportage\_RTH}, BIOS V1.60 de 08/04/2026), chassi \texttt{laptop} \\
-Host & \texttt{tutus-house} (usuário \texttt{tutu}) \\
 Processador & 13th Gen Intel(R) Core(TM) i5-13420H --- 8 núcleos físicos / 12 \textit{threads}, até 4,60 GHz, cache L3 de 12 MiB, x86-64, VT-x \\
 Perfil de energia & Economia de bateria \textbf{desativada} --- modo de desempenho \\
 Memória RAM & 7,5 GiB (~8 GB); \textit{swap} de 7,5 GiB em \texttt{/dev/nvme0n1p6} \\
@@ -421,7 +431,7 @@ METRICAS GERAIS DE LATENCIA (Resposta do Nginx):
   - Maxima: 12.9 ms
 \end{lstlisting}
 
-A saída comprova que o Nginx distribui o fluxo entre os contêineres identificados pelos IDs \texttt{0cb33ff8} e \texttt{5eaf4bfa}, com alternância exata de 5/5. Como as requisições foram \textbf{sequenciais} (concorrência~1), ambas as réplicas permanecem com zero conexões ativas entre uma chamada e outra; o \texttt{least\_conn} empataria e o desempate seguiria a ordem do \texttt{upstream}, comportamento indistinguível do \textit{Round-Robin}. Portanto, este teste prova que o balanceamento alcança os dois contêineres, mas \textbf{não identifica qual algoritmo estava ativo}. A confirmação do algoritmo veio da configuração efetiva (\texttt{nginx -T}) e da comparação controlada da Seção~4.3. O cabeçalho \texttt{X-Upstream-Backend} confirma o endereço interno do backend escolhido em cada resposta.
+A saída comprova que o Nginx distribui o fluxo entre os contêineres identificados pelos IDs \texttt{0cb33ff8} e \texttt{5eaf4bfa}, com alternância exata de 5/5. Como as requisições foram \textbf{sequenciais} (concorrência~1), ambas as réplicas permanecem com zero conexões ativas entre uma chamada e outra; o \texttt{least\_conn} empataria (zero conexões em ambas) e o Nginx desempata por round-robin entre as réplicas empatadas, comportamento indistinguível do Round-Robin puro. A confirmação do algoritmo veio da configuração efetiva (\texttt{nginx -T}) e da comparação controlada da Seção~4.3. O cabeçalho \texttt{X-Upstream-Backend} confirma o endereço interno do backend escolhido em cada resposta.
 
 \subsection{Avaliação Experimental: \textit{Round-Robin} (baseline) versus \textit{Least Connections}}
 O roteiro prático solicita a avaliação dos escalonamentos tendo o \textit{Round-Robin} como \textit{baseline}. Para medir os dois algoritmos, a diretiva \texttt{least\_conn;} foi temporariamente comentada na coleta do baseline e depois reativada. A troca foi aplicada a quente, sem reiniciar os contêineres:
@@ -540,7 +550,7 @@ docker start api_instancia_2
 \end{lstlisting}
 As três requisições durante a falha foram atendidas pela \texttt{Instancia-1}, e cerca de 6 segundos após a recuperação o tráfego retornou à \texttt{Instancia-2}. Portanto, os parâmetros \texttt{max\_fails=3} e \texttt{fail\_timeout=5s} continuam protegendo a disponibilidade mesmo com afinidade por IP.
 
-O \texttt{ip\_hash} troca a distribuição uniforme por previsibilidade de origem. Com um único IP de teste toda a carga concentra-se em uma réplica (100\% na \texttt{Instancia-2}); em produção, com muitos IPs distintos, o hash tende a distribuir os clientes entre as duas réplicas, mas sem o ajuste dinâmico do \texttt{least\_conn}. Como as APIs são \textit{stateless} e compartilham o mesmo PostgreSQL, a afinidade não traz ganho funcional neste projeto e pode concentrar carga; ela seria vantajosa apenas se houvesse estado local de sessão. Há ainda duas ressalvas operacionais: um proxy ou NAT à frente do Nginx faz todos os clientes aparecerem com o mesmo IP, e para IPv4 o hash considera apenas os três primeiros octetos. A latência média (5,67 ms) ficou próxima da tendência medida para o \texttt{least\_conn} (5,02 ms), e a vazão média (1477,7 req/s) situou-se entre o \textit{baseline} e o \texttt{least\_conn}, com P95 mais instável (18,60 ms, influenciado pelo pico de 28,7 ms registrado na Tabela~\ref{tab:iphash}). Por todos esses motivos --- ausência de estado local, exigência de alternância no navegador e risco de concentração --- o \texttt{ip\_hash} \textbf{não foi adotado como configuração final}. O \texttt{least\_conn} segue ativo; \texttt{ip\_hash} e \textit{Round-Robin} permanecem documentados como alternativas avaliadas. O teste de parada da réplica fixa descrito acima, sim, comprova a detecção passiva: ao contrário do teste da Seção~4.5, aqui o tráfego tinha uma réplica alternativa para a qual migrar mesmo com a afinidade ativa.
+O \texttt{ip\_hash} troca a distribuição uniforme por previsibilidade de origem. Com um único IP de teste toda a carga concentra-se em uma réplica (100\% na \texttt{Instancia-2}); em produção, com muitos IPs distintos, o hash tende a distribuir os clientes entre as duas réplicas, mas sem o ajuste dinâmico do \texttt{least\_conn}. Como as APIs são \textit{stateless} e compartilham o mesmo PostgreSQL, a afinidade não traz ganho funcional neste projeto e pode concentrar carga; ela seria vantajosa apenas se houvesse estado local de sessão. Há ainda duas ressalvas operacionais: um proxy ou NAT à frente do Nginx faz todos os clientes aparecerem com o mesmo IP, e para IPv4 o hash considera apenas os três primeiros octetos. A latência média (5,67 ms) ficou próxima da tendência medida para o \texttt{least\_conn} (5,02 ms), e a vazão média (1477,7 req/s) situou-se entre o \textit{baseline} e o \texttt{least\_conn}, com P95 mais instável (18,60 ms, influenciado pelo pico de 28,7 ms da repetição 2 na Tabela~\ref{tab:iphash}). Por todos esses motivos --- ausência de estado local, exigência de alternância no navegador e risco de concentração --- o \texttt{ip\_hash} \textbf{não foi adotado como configuração final}. O \texttt{least\_conn} segue ativo; \texttt{ip\_hash} e \textit{Round-Robin} permanecem documentados como alternativas avaliadas. O teste de parada da réplica fixa descrito acima, sim, comprova a detecção passiva: ao contrário do teste da Seção~4.5, aqui o tráfego tinha uma réplica alternativa para a qual migrar mesmo com a afinidade ativa. Concluída esta avaliação, a configuração foi revertida para \texttt{least\_conn} com \texttt{scripts/trocar\_algoritmo.sh}, e é com esse algoritmo que foram executados os testes da Seção~4.5.
 
 \textit{Nota metodológica:} os números acima são de execuções curtas no mesmo host (20/11/2026) e servem como evidência de funcionamento, não como \textit{benchmark} rigoroso. A concentração em uma única instância é consequência direta de todo o tráfego de teste originar-se de \texttt{localhost}.
 
