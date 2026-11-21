@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Votos — Interface Web</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+</head>
+<body>
+    <header class="cabecalho">
+        <div class="container cabecalho-interno">
+            <div>
+                <h1>🗳️ Simulador de Votos</h1>
+                <p>Interface web para interagir com a API Express + PostgreSQL com balanceamento de carga.</p>
+            </div>
+            <div class="acoes-topo">
+                <label class="auto">
+                    <input type="checkbox" id="chk-auto" checked>
+                    Atualização automática
+                </label>
+                <button type="button" id="btn-atualizar" class="btn btn-secundario">⟳ Atualizar dados</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Painel de status / balanceamento -->
+        <section class="painel status" aria-labelledby="titulo-status">
+            <h2 id="titulo-status">Estado do servidor</h2>
+            <div class="grid-status">
+                <div class="item-status">
+                    <span class="rotulo">API</span>
+                    <strong id="api-status" class="valor">—</strong>
+                </div>
+                <div class="item-status">
+                    <span class="rotulo">Banco de dados</span>
+                    <strong id="db-status" class="valor">—</strong>
+                </div>
+                <div class="item-status">
+                    <span class="rotulo">Última instância</span>
+                    <strong id="instancia-atual" class="valor">—</strong>
+                </div>
+                <div class="item-status">
+                    <span class="rotulo">Container</span>
+                    <strong id="hostname-atual" class="valor">—</strong>
+                </div>
+                <div class="item-status">
+                    <span class="rotulo">Atualizado às</span>
+                    <strong id="ultima-atualizacao" class="valor">—</strong>
+                </div>
+            </div>
+
+            <div class="balanceamento">
+                <div class="balanceamento-titulo">
+                    <span>Balanceamento de carga</span>
+                    <small id="total-requisicoes">0 requisições nesta sessão</small>
+                </div>
+                <div class="barras-instancia">
+                    <div class="barra-instancia">
+                        <span>Instancia-1</span>
+                        <div class="trilha"><div class="preenchimento cor1" id="barra-instancia-1"></div></div>
+                        <strong id="contador-instancia-1">0</strong>
+                    </div>
+                    <div class="barra-instancia">
+                        <span>Instancia-2</span>
+                        <div class="trilha"><div class="preenchimento cor2" id="barra-instancia-2"></div></div>
+                        <strong id="contador-instancia-2">0</strong>
+                    </div>
+                </div>
+                <p class="dica">Cada chamada à API conta aqui — recarregue os dados e veja as requisições serem distribuídas entre as duas réplicas.</p>
+            </div>
+        </section>
+
+        <div class="grid-principal">
+            <!-- Votação -->
+            <section class="painel" aria-labelledby="titulo-voto">
+                <h2 id="titulo-voto">Registrar voto</h2>
+                <p class="descricao">Selecione um candidato e confirme. O voto é gravado de forma atômica no PostgreSQL.</p>
+
+                <div id="lista-candidatos" class="lista-candidatos">
+                    <p class="carregando">Carregando candidatos…</p>
+                </div>
+
+                <button type="button" id="btn-votar" class="btn btn-primario" disabled>✓ Confirmar voto</button>
+                <p id="dica-selecao" class="dica">Escolha um candidato para habilitar a confirmação.</p>
+            </section>
+
+            <!-- Apuração -->
+            <section class="painel" aria-labelledby="titulo-apuracao">
+                <div class="cabecalho-apuracao">
+                    <div>
+                        <h2 id="titulo-apuracao">Apuração em tempo real</h2>
+                        <p class="descricao">Resultado consolidado das duas instâncias.</p>
+                    </div>
+                    <div class="total-geral">
+                        <span>Total de votos</span>
+                        <strong id="total-geral">—</strong>
+                    </div>
+                </div>
+
+                <div id="apuracao-status" class="carregando">Carregando apuração…</div>
+                <div id="tabela-apuracao" class="tabela-apuracao"></div>
+            </section>
+        </div>
+
+        <section class="painel links" aria-label="Endpoints da API">
+            <h2>Endpoints brutos (JSON)</h2>
+            <div class="links-lista">
+                <a href="/" target="_blank" rel="noopener">GET / — health check</a>
+                <a href="/candidatos" target="_blank" rel="noopener">GET /candidatos</a>
+                <a href="/apuracao" target="_blank" rel="noopener">GET /apuracao</a>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <footer class="rodape">
+        <div class="container">
+            Simulador de Votos · Prática 1 — Infraestrutura Web e Balanceamento de Carga
+        </div>
+    </footer>
+</body>
+</html>

@@ -14,6 +14,10 @@ Simulador-de-Votos/
 ├── docker-compose.yml         # [Squad 1] Orquestração dos 4 containers
 ├── nginx/                     # [Squad 1] Configurações do Proxy Reverso
 │   └── nginx.conf
+├── frontend/                  # Interface web estática (HTML/CSS/JS, sem build)
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
 ├── backend/                   # [Squad 2] Código-fonte da API de votação
 │   └── ...
 ├── database/                  # [Squad 3] Scripts de banco e schema
@@ -216,6 +220,27 @@ docker compose up --build -d
 ```
 
 **`$'\r': command not found` ao rodar um `.sh`:** o arquivo veio com quebras de linha do Windows. Corrija com `sed -i 's/\r$//' scripts/<arquivo>.sh`.
+
+---
+
+### 7. Interface Web (frontend)
+
+Além dos endpoints JSON, o projeto inclui uma interface web simples (HTML/CSS/JavaScript puro, sem build) servida pelo próprio Nginx em **[http://localhost/app](http://localhost/app)**.
+
+A interface permite:
+
+- ver o estado da API e do banco, o hostname do container e a instância que respondeu;
+- acompanhar a distribuição das requisições entre `Instancia-1` e `Instancia-2` (contadores atualizados a cada chamada à API);
+- selecionar um candidato e registrar votos via `POST /votar`;
+- acompanhar a apuração com total geral, barras e percentuais, com atualização automática a cada 5 segundos.
+
+A rota `/` continua respondendo ao health check da API — ela não foi alterada, então os scripts de balanceamento seguem funcionando. Se a stack já estiver rodando, recrie apenas o contêiner do Nginx para montar o novo volume:
+
+```bash
+docker compose up -d nginx
+```
+
+A interface chama `/candidatos`, `/votar` e `/apuracao` na mesma origem do proxy, portanto não é necessário configurar CORS.
 
 ---
 
