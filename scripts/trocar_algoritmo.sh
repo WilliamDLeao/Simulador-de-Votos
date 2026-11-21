@@ -29,19 +29,25 @@ case "$escolha" in
   *) echo "Algoritmo inválido: $escolha (use rr, least_conn ou ip_hash)"; exit 1 ;;
 esac
 
-# Remove qualquer algoritmo atual dentro do upstream
-sed -i -E '/^[[:space:]]*(least_conn|ip_hash);/d' "$CONF"
+# Edita uma cópia temporária e grava de volta com "cat >", que preserva o inode.
+# (sed -i troca o inode e o bind mount do Docker continuaria vendo o arquivo antigo.)
+TMP="$(mktemp)"
+sed -E '/^[[:space:]]*(least_conn|ip_hash);/d' "$CONF" > "$TMP"
 
 # Insere o novo logo depois da abertura do upstream (Round Robin = nada)
 if [ -n "$linha" ]; then
-  sed -i "/upstream simulador_votacao {/a\\        $linha" "$CONF"
+  sed -i "/upstream simulador_votacao {/a\\        $linha" "$TMP"
 fi
+
+cat "$TMP" > "$CONF"
+rm -f "$TMP"
 
 echo "Algoritmo definido: $escolha"
 
 # Valida e recarrega
 if docker exec "$CONTAINER" nginx -t && docker exec "$CONTAINER" nginx -s reload; then
   echo "Nginx recarregado."
+  docker exec "$CONTAINER" nginx -T 2>/dev/null | grep -A3 "upstream simulador_votacao"
 else
   echo "Erro ao recarregar. Confira o nginx.conf."
   exit 1
