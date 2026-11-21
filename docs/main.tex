@@ -10,7 +10,7 @@
 \usepackage{booktabs}
 \usepackage{tikz}
 \usepackage{amsmath}
-\usetikzlibrary{shapes,arrows.meta,positioning,fit,backgrounds}
+\usetikzlibrary{shapes,arrows.meta,positioning,fit,backgrounds,calc}
 
 \geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm}
 
@@ -69,7 +69,7 @@
 \maketitle
 
 \begin{abstract}
-Este relatório documenta a concepção, a implementação e a validação experimental de uma infraestrutura distribuída para um sistema de votação eletrônica de alta disponibilidade, desenvolvida em conformidade com as diretrizes da \textbf{Prática 1: Infraestrutura Web e Balanceamento de Carga} da disciplina de Sistemas Operacionais Modernos. A arquitetura implementada organiza quatro contêineres interdependentes orquestrados via Docker Compose: um Proxy Reverso e balanceador de carga Nginx configurado inicialmente com \textit{Least Connections} (\texttt{least\_conn}) e, na configuração final, com \textit{IP Hash} (\texttt{ip\_hash}), duas instâncias homogêneas e sem estado (\textit{stateless}) da API de votação desenvolvidas em Node.js/Express, e um Sistema Gerenciador de Banco de Dados relacional PostgreSQL 15 munido de persistência durável via Docker Volume nomeado e isolamento estrito de portas através de uma Docker Network em modo \textit{bridge}. Este documento registra minuciosamente o que foi efetivamente implementado até o momento, descrevendo os componentes, as decisões arquiteturais de sistemas operacionais, as evidências de alternância de nós e os procedimentos de validação de persistência e tolerância a falhas.
+Este relatório documenta a concepção, a implementação e a validação experimental de uma infraestrutura distribuída para um sistema de votação eletrônica de alta disponibilidade, desenvolvida em conformidade com as diretrizes da \textbf{Prática 1: Infraestrutura Web e Balanceamento de Carga} da disciplina de Sistemas Operacionais Modernos. A arquitetura implementada organiza quatro contêineres interdependentes orquestrados via Docker Compose: um Proxy Reverso e balanceador de carga Nginx configurado com \textit{Least Connections} (\texttt{least\_conn}) como escalonamento final (\textit{Round-Robin} como \textit{baseline} e \textit{IP Hash} avaliados para comparação), duas instâncias homogêneas e sem estado (\textit{stateless}) da API de votação desenvolvidas em Node.js/Express, e um Sistema Gerenciador de Banco de Dados relacional PostgreSQL 15 munido de persistência durável via Docker Volume nomeado e isolamento estrito de portas através de uma Docker Network em modo \textit{bridge}. Este documento registra minuciosamente o que foi efetivamente implementado até o momento, descrevendo os componentes, as decisões arquiteturais de sistemas operacionais, as evidências de alternância de nós e os procedimentos de validação de persistência e tolerância a falhas.
 \end{abstract}
 
 \tableofcontents
@@ -98,6 +98,7 @@ A arquitetura implementada fundamenta-se no padrão de \textit{Proxy Reverso de 
 
 \begin{figure}[h!]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
     box/.style={draw, rectangle, rounded corners, minimum height=1.1cm, minimum width=2.6cm, align=center, fill=blue!8, font=\small},
     proxy/.style={draw, rectangle, rounded corners, minimum height=1.3cm, minimum width=3.0cm, align=center, fill=green!18, font=\small\bfseries},
@@ -122,8 +123,8 @@ A arquitetura implementada fundamenta-se no padrão de \textit{Proxy Reverso de 
 
     % Conexões
     \draw[arrow] (user) -- node[above, font=\footnotesize] {HTTP :80} (nginx);
-    \draw[arrow] (nginx) -- node[above left, font=\scriptsize] {\textit{ip\_hash}} (api1);
-    \draw[arrow] (nginx) -- node[below left, font=\scriptsize] {\textit{ip\_hash}} (api2);
+    \draw[arrow] (nginx) -- node[above left, font=\scriptsize] {\texttt{least\_conn}} (api1);
+    \draw[arrow] (nginx) -- node[below left, font=\scriptsize] {\texttt{least\_conn}} (api2);
     \draw[arrow] (api1) -- node[above right, font=\scriptsize] {TCP/SQL :5432} (db);
     \draw[arrow] (api2) -- node[below right, font=\scriptsize] {TCP/SQL :5432} (db);
     \draw[dashed, thick] (db) -- (volume);
@@ -133,7 +134,8 @@ A arquitetura implementada fundamenta-se no padrão de \textit{Proxy Reverso de 
         \node[draw=red!70, line width=1.2pt, dashed, inner sep=0.45cm, rounded corners, fit=(nginx) (api1) (api2) (db) (volume), fill=red!2] (net) {};
         \node[anchor=north west, red!80!black, font=\bfseries\footnotesize] at (net.north west) {Docker Network Isolada: \texttt{rede\_votacao} (driver bridge)};
     \end{scope}
-\end{tikzpicture}
+\end{tikzpicture}%
+}
 \caption{Diagrama da Arquitetura do Sistema: Rede Privada, Proxy de Borda, Backends e Persistência.}
 \label{fig:arquitetura}
 \end{figure}
@@ -143,6 +145,7 @@ A Tabela~\ref{tab:containers} resume as características e as configurações do
 \begin{table}[h!]
 \centering
 \small
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lllll}
 \toprule
 \textbf{Serviço} & \textbf{Nome do Contêiner} & \textbf{Imagem Base} & \textbf{Porta Externa} & \textbf{Porta Interna} \\
@@ -152,7 +155,8 @@ A Tabela~\ref{tab:containers} resume as características e as configurações do
 \texttt{api2} & \texttt{api\_instancia\_2} & \textit{Custom} (Node 20 Alpine, v20.20.2) & Nenhuma & 5000 \\
 \texttt{db} & \texttt{db\_postgres} & \texttt{postgres:15-alpine} & Nenhuma & 5432 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \caption{Especificação dos Contêineres Orquestrados no Ambiente.}
 \label{tab:containers}
 \end{table}
@@ -289,10 +293,10 @@ docker compose up --build -d
 A inspeção do estado dos contêineres por meio de \texttt{docker compose ps} atesta a operacionalidade síncrona dos quatro serviços, conforme ilustrado na Figura~\ref{fig:containers-running}:
 \begin{lstlisting}[language=bash]
 NAME                IMAGE                  COMMAND                  SERVICE   STATUS   PORTS
-api_instancia_1     simulador-votos-api1   "docker-entrypoint.s…"   api1      Up       5000/tcp
-api_instancia_2     simulador-votos-api2   "docker-entrypoint.s…"   api2      Up       5000/tcp
-db_postgres         postgres:15-alpine     "docker-entrypoint.s…"   db        Up       5432/tcp
-proxy_nginx         nginx:alpine           "/docker-entrypoint.…"   nginx     Up       0.0.0.0:80->80/tcp
+api_instancia_1     simulador-votos-api1   "docker-entrypoint.s..."   api1      Up       5000/tcp
+api_instancia_2     simulador-votos-api2   "docker-entrypoint.s..."   api2      Up       5000/tcp
+db_postgres         postgres:15-alpine     "docker-entrypoint.s..."   db        Up       5432/tcp
+proxy_nginx         nginx:alpine           "/docker-entrypoint...."   nginx     Up       0.0.0.0:80->80/tcp
 \end{lstlisting}
 
 \begin{figure}[h!]
