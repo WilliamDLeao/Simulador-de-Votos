@@ -356,7 +356,7 @@ docker exec proxy_nginx nginx -T | grep -A6 'upstream simulador_votacao'
 # }
 ```
 
-> **Nota de aplicação da configuração:** o script `trocar_algoritmo.sh` edita o arquivo com `sed -i`, que substitui o inode do arquivo. Como `nginx.conf` é injetado por *bind mount* (`./nginx/nginx.conf:/etc/nginx/nginx.conf:ro`), o contêiner continuou enxergando a versão antiga mesmo após `nginx -s reload`. Foi necessário recriar apenas o proxy (`docker compose up -d --force-recreate nginx`) para que o montante passasse a apontar para o arquivo com `ip_hash`. A checagem com `nginx -T` acima foi feita **depois** dessa recriação.
+> **Nota de aplicação da configuração:** na versão inicial usada durante a coleta de 20/11/2026, o script `trocar_algoritmo.sh` editava o arquivo diretamente com `sed -i`, que substitui o inode do arquivo. Como `nginx.conf` é injetado por *bind mount* (`./nginx/nginx.conf:/etc/nginx/nginx.conf:ro`), o contêiner continuava enxergando o inode antigo mesmo após `nginx -s reload`, sendo necessário recriar o proxy (`docker compose up -d --force-recreate nginx`). Posteriormente, o script foi corrigido para gravar via arquivo temporário (`mktemp`) e redirecionamento (`cat "$TMP" > "$CONF"`), preservando o inode original para que o `nginx -s reload` funcione diretamente.
 
 Executando novamente o teste de 10 requisições sequenciais em 20/11/2026:
 
@@ -449,12 +449,6 @@ curl -X POST http://localhost/votar -H "Content-Type: application/json" -d '{"nu
   "candidato": { "numero": 10, "nome": "Candidato A", "totalVotosAtualizado": 2534 },
   "processadoPor": { "instancia": "Instancia-2", "hostname": "5eaf4bfaecb3" },
   "timestamp": "2026-11-19T16:55:30.939Z" }
-```
-```json
-{ "sucesso": true, "mensagem": "Voto computado com sucesso para Candidato B (20)!",
-  "candidato": { "numero": 20, "nome": "Candidato B", "totalVotosAtualizado": 38 },
-  "processadoPor": { "instancia": "Instancia-1", "hostname": "0cb33ff83fe4" },
-  "timestamp": "2026-11-19T16:55:30.952Z" }
 ```
 
 #### Passo 2: Verificação da Apuração
@@ -659,6 +653,6 @@ O código-fonte completo, scripts e documentações do projeto estão disponíve
 - **Definição do Esquema Relacional:** [`database/init.sql`](../database/init.sql)
 - **Scripts de Validação e Benchmark:** [`scripts/test_load_balancer.ps1`](../scripts/test_load_balancer.ps1) e [`scripts/test_load_balancer.js`](../scripts/test_load_balancer.js)
 - **Troca de Algoritmo de Balanceamento:** [`scripts/trocar_algoritmo.sh`](../scripts/trocar_algoritmo.sh)
-- **Teste de Falha de Container:** [`scripts/demo_falha_container.sh`](../scripts/demo_falha_container.sh)
+- **Testes de Resiliência e Falha de Container:** [`scripts/demo_falha_container.sh`](../scripts/demo_falha_container.sh) e [`scripts/demo_resiliencia.ps1`](../scripts/demo_resiliencia.ps1)
 - **Simulação de Carga Extrema (demonstração extra):** [`scripts/demo_ddos_local.js`](../scripts/demo_ddos_local.js)
 - **Relatório em Formato LaTeX:** [`docs/main.tex`](main.tex)

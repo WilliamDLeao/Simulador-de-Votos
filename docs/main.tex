@@ -245,6 +245,71 @@ INSERT INTO candidatos (numero, nome, partido, total_votos) VALUES
 ON CONFLICT (numero) DO NOTHING;
 \end{lstlisting}
 
+\subsubsection{Configuração do Contêiner do SGBD}
+O serviço \texttt{db} (contêiner \texttt{db\_postgres}) é declarado no \texttt{docker-compose.yml} com os parâmetros resumidos na Tabela~\ref{tab:config_db}. As APIs localizam o banco pelo nome do serviço (\texttt{DB\_HOST=db}, \texttt{DB\_PORT=5432}), resolvido pelo DNS interno do Docker, e utilizam as mesmas credenciais injetadas por variáveis de ambiente.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{p{3.6cm}p{4.8cm}p{5.4cm}}
+\toprule
+\textbf{Parâmetro} & \textbf{Valor} & \textbf{Finalidade} \\
+\midrule
+\texttt{image} & \texttt{postgres:15-alpine} & Imagem oficial do PostgreSQL 15 em base Alpine \\
+\texttt{container\_name} & \texttt{db\_postgres} & Nome fixo usado em \texttt{docker exec} e scripts \\
+\texttt{POSTGRES\_DB} & \texttt{votacao} & Banco criado na primeira inicialização \\
+\texttt{POSTGRES\_USER} & \texttt{postgres} & Superusuário do banco \\
+\texttt{POSTGRES\_PASSWORD} & \texttt{postgres} & Senha do superusuário (ambiente acadêmico) \\
+\texttt{volumes} (dados) & \texttt{pgdata:/var/lib/postgresql/data} & Persistência física via Docker Volume \\
+\texttt{volumes} (init) & \texttt{./database/init.sql:...init.sql:ro} & Criação do schema e carga inicial (somente leitura) \\
+\texttt{networks} & \texttt{rede\_votacao} (\textit{bridge}) & Rede privada compartilhada com as APIs \\
+\texttt{ports} & \textit{Nenhuma publicada} & Porta \texttt{5432} restrita à rede interna \\
+\texttt{restart} & \texttt{always} & Reinício automático em caso de falha \\
+\bottomrule
+\end{tabular}
+\caption{Parâmetros de configuração do contêiner \texttt{db\_postgres}.}
+\label{tab:config_db}
+\end{table}
+
+\subsubsection{Esquema Relacional e Decisões de Projeto}
+O esquema é composto por duas tabelas relacionadas (\texttt{candidatos} e \texttt{votos}), conforme detalhado na Tabela~\ref{tab:schema_db}:
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{lllll}
+\toprule
+\textbf{Tabela} & \textbf{Coluna} & \textbf{Tipo} & \textbf{Restrições} & \textbf{Função} \\
+\midrule
+\texttt{candidatos} & \texttt{id} & \texttt{SERIAL} & PK & Identificador interno \\
+ & \texttt{numero} & \texttt{INT} & \texttt{UNIQUE, NOT NULL} & Número na votação (10, 20, 99) \\
+ & \texttt{nome} & \texttt{VARCHAR(100)} & \texttt{NOT NULL} & Nome do candidato \\
+ & \texttt{partido} & \texttt{VARCHAR(50)} & \texttt{NOT NULL} & Partido vinculado \\
+ & \texttt{total\_votos} & \texttt{INT} & \texttt{DEFAULT 0} & Contador acumulado para apuração rápida \\
+\midrule
+\texttt{votos} & \texttt{id} & \texttt{SERIAL} & PK & Identificador do voto \\
+ & \texttt{candidato\_id} & \texttt{INT} & FK $\rightarrow$ \texttt{candidatos(id)} & Candidato escolhido \\
+ & \texttt{instancia\_origem} & \texttt{VARCHAR(50)} & \texttt{NOT NULL} & Réplica da API que processou o voto \\
+ & \texttt{criado\_em} & \texttt{TIMESTAMP} & \texttt{DEFAULT CURRENT\_TIMESTAMP} & Carimbo de tempo do registro \\
+\bottomrule
+\end{tabular}
+\caption{Esquema das tabelas \texttt{candidatos} e \texttt{votos}.}
+\label{tab:schema_db}
+\end{table}
+
+As principais decisões de projeto adotadas no banco de dados incluem:
+\begin{itemize}
+    \item \textbf{Tabela de auditoria aliada a contador:} cada voto insere uma linha em \texttt{votos} (registrando horário e instância de origem) e incrementa \texttt{candidatos.total\_votos}, permitindo leitura rápida em \texttt{GET /apuracao} sem exigir \texttt{COUNT(*)} completo a cada consulta.
+    \item \textbf{Consistência transacional via CTE:} o \texttt{UPDATE} e o \texttt{INSERT} ocorrem na mesma instrução SQL, garantindo que a soma de \texttt{candidatos.total\_votos} seja sempre idêntica ao total de registros em \texttt{votos}.
+    \item \textbf{Idempotência de inicialização:} o uso de \texttt{CREATE TABLE IF NOT EXISTS} e \texttt{INSERT ... ON CONFLICT (numero) DO NOTHING} evita falhas ou duplicidades caso o script seja reexecutado, lembrando que o PostgreSQL só aciona \texttt{/docker-entrypoint-initdb.d/} quando o volume \texttt{pgdata} está vazio.
+\end{itemize}
+
+\subsubsection{Limitações Conhecidas e Melhorias Possíveis}
+\begin{itemize}
+    \item \textbf{Credenciais no manifesto:} usuário e senha (\texttt{postgres}/\texttt{postgres}) estão declarados em texto puro no \texttt{docker-compose.yml}, adequado ao escopo acadêmico; em produção recomenda-se o uso de \textit{Docker secrets} ou variáveis em \texttt{.env} não versionado e usuário com privilégios mínimos.
+    \item \textbf{Ausência de \texttt{healthcheck} no banco:} o \texttt{depends\_on} aguarda apenas a subida do contêiner \texttt{db}, não a prontidão do processo PostgreSQL; um \texttt{healthcheck} com \texttt{pg\_isready} evitaria erros transitórios de conexão na partida.
+    \item \textbf{Coluna \texttt{candidato\_id} sem \texttt{NOT NULL}:} embora a CTE da aplicação sempre preencha a chave estrangeira a partir do candidato atualizado, adicionar \texttt{NOT NULL} no esquema reforçaria a integridade relacional no nível do SGBD.
+\end{itemize}
+
 \subsection{Ambiente de Execução --- Notebook e Configuração do Sistema}
 As medições da Seção~4 foram realizadas em \textbf{19/11/2026} (Round-Robin, \texttt{least\_conn}, persistência e isolamento) e \textbf{20/11/2026} (\texttt{ip\_hash}), com o notebook operando no \textbf{perfil de desempenho (economia de bateria desativada)}. O ambiente físico e as versões de software utilizados foram:
 \begin{table}[h!]
@@ -407,7 +472,7 @@ docker exec proxy_nginx nginx -T | grep -A6 'upstream simulador_votacao'
 # }
 \end{lstlisting}
 
-\textit{Nota de aplicação da configuração:} o script \texttt{trocar\_algoritmo.sh} edita o arquivo com \texttt{sed -i}, que substitui o inode do arquivo. Como \texttt{nginx.conf} é injetado por \textit{bind mount} (\texttt{./nginx/nginx.conf:/etc/nginx/nginx.conf:ro}), o contêiner continuou enxergando a versão antiga mesmo após \texttt{nginx -s reload}. Foi necessário recriar apenas o proxy (\texttt{docker compose up -d --force-recreate nginx}) para que o montante apontasse para o arquivo com \texttt{ip\_hash}; a verificação com \texttt{nginx -T} acima foi feita \textbf{depois} dessa recriação.
+\textit{Nota de aplicação da configuração:} na versão inicial usada durante a coleta de 20/11/2026, o script \texttt{trocar\_algoritmo.sh} editava o arquivo diretamente com \texttt{sed -i}, que substitui o inode no sistema de arquivos. Como \texttt{nginx.conf} entra no contêiner por \textit{bind mount} (\texttt{./nginx/nginx.conf:/etc/nginx/nginx.conf:ro}), o contêiner continuava enxergando o inode antigo mesmo após \texttt{nginx -s reload}, sendo necessário recriar o proxy (\texttt{docker compose up -d --force-recreate nginx}). Posteriormente, o script foi corrigido para gravar as alterações via arquivo temporário (\texttt{mktemp}) e redirecionamento (\texttt{cat "\$TMP" > "\$CONF"}), preservando o inode original e permitindo que o \texttt{nginx -s reload} aplique o novo algoritmo imediatamente.
 
 Executando novamente o teste de 10 requisições sequenciais em 20/11/2026 (\texttt{node scripts/test\_load\_balancer.js 10}), obteve-se:
 \begin{lstlisting}[language=bash, caption={Resumo da execução do teste de 10 requisições com \texttt{ip\_hash}, obtida em 20/11/2026}]
@@ -529,9 +594,12 @@ Antes da inserção dos votos de teste, o volume \texttt{pgdata} continha \textb
       "sucesso": true,
       "totalVotosGeral": 2572,
       "apuracao": [
-        { "numero": 10, "nome": "Candidato A", "total_votos": 2534, "percentual": "98.52%" },
-        { "numero": 20, "nome": "Candidato B", "total_votos": 38, "percentual": "1.48%" },
-        { "numero": 99, "nome": "Voto Nulo / Branco", "total_votos": 0, "percentual": "0.00%" }
+        { "numero": 10, "nome": "Candidato A", "partido": "Partido A",
+          "total_votos": 2534, "percentual": "98.52%" },
+        { "numero": 20, "nome": "Candidato B", "partido": "Partido B",
+          "total_votos": 38, "percentual": "1.48%" },
+        { "numero": 99, "nome": "Voto Nulo / Branco", "partido": "Nenhum",
+          "total_votos": 0, "percentual": "0.00%" }
       ]
     }
 
@@ -637,7 +705,7 @@ Todos os códigos-fonte desenvolvidos, manifestos de orquestração, esquemas re
     \item \textbf{Definição do Esquema e Carga Inicial:} \texttt{database/init.sql}
     \item \textbf{Ferramentas de Teste e Benchmark:} \texttt{scripts/test\_load\_balancer.ps1} e \texttt{scripts/test\_load\_balancer.js}
     \item \textbf{Troca de Algoritmo de Balanceamento:} \texttt{scripts/trocar\_algoritmo.sh}
-    \item \textbf{Teste de Falha de um Container:} \texttt{scripts/demo\_falha\_container.sh}
+    \item \textbf{Testes de Resiliência e Falha de Container:} \texttt{scripts/demo\_falha\_container.sh} e \texttt{scripts/demo\_resiliencia.ps1}
     \item \textbf{Simulação de Carga Extrema (demonstração extra):} \texttt{scripts/demo\_ddos\_local.js}
 \end{itemize}
 

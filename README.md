@@ -151,7 +151,7 @@ bash scripts/trocar_algoritmo.sh ip_hash      # IP Hash
 bash scripts/trocar_algoritmo.sh              # sem argumento: mostra um menu
 ```
 
-> **Atenção:** o script usa `sed -i`, que substitui o inode de `nginx.conf`. Como o arquivo entra no container por *bind mount*, o `nginx -s reload` pode continuar lendo a configuração antiga. Após trocar o algoritmo, confirme com `docker exec proxy_nginx nginx -T | grep -A3 upstream` e, se necessário, recrie apenas o proxy com `docker compose up -d --force-recreate nginx`.
+> **Nota técnica:** o script edita uma cópia temporária (`mktemp`) e sobrescreve `nginx.conf` com `cat "$TMP" > "$CONF"` para preservar o *inode* do arquivo no *bind mount* do Docker (usar `sed -i` diretamente no arquivo trocaria o inode e faria o container continuar lendo a versão antiga). Após trocar o algoritmo, você pode confirmar a configuração ativa com `docker exec proxy_nginx nginx -T | grep -A3 upstream`.
 
 ---
 
